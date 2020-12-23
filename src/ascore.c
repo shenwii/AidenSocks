@@ -372,6 +372,16 @@ static void __socket_close_event(as_loop_t *loop)
     p = NULL;
     while(s != NULL)
     {
+        LOG_DEBUG("socket = %p\n", s);
+        if(s->type != SOCKET_TYPE_UDP_FAKE)
+        {
+            if(s->fd > 0)
+            {
+                LOG_DEBUG("fd = %d\n", s->fd);
+            }
+            LOG_DEBUG("handling = %d\n", s->handling);
+            LOG_DEBUG("act = %d\n", s->active);
+        }
         if((s->active == ACTIVE_CLOSE) && s->handling == 0)
         {
             if(s->map != NULL && s->map->handling != 0)
@@ -556,6 +566,8 @@ int as_tcp_connect(as_tcp_t *tcp, struct sockaddr *addr)
 int as_tcp_read_start(as_tcp_t *tcp, as_tcp_read_f cb)
 {
     struct epoll_event ev;
+    if(tcp->sck.active == ACTIVE_CLOSE)
+        return 2;
     memset(&ev, 0, sizeof(struct epoll_event));
     if(tcp->sck.fd <= 0)
         return 1;
@@ -700,6 +712,8 @@ int as_udp_connect(as_udp_t *udp, struct sockaddr *addr)
 int as_udp_read_start(as_udp_t *udp, as_udp_read_f cb)
 {
     struct epoll_event ev;
+    if(udp->sck.active == ACTIVE_CLOSE)
+        return 2;
     memset(&ev, 0, sizeof(struct epoll_event));
     if(udp->sck.fd <= 0)
         return 1;
