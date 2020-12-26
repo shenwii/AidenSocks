@@ -372,16 +372,6 @@ static void __socket_close_event(as_loop_t *loop)
     p = NULL;
     while(s != NULL)
     {
-        LOG_DEBUG("socket = %p\n", s);
-        if(s->type != SOCKET_TYPE_UDP_FAKE)
-        {
-            if(s->fd > 0)
-            {
-                LOG_DEBUG("fd = %d\n", s->fd);
-            }
-            LOG_DEBUG("handling = %d\n", s->handling);
-            LOG_DEBUG("act = %d\n", s->active);
-        }
         if((s->active == ACTIVE_CLOSE) && s->handling == 0)
         {
             if(s->map != NULL && s->map->handling != 0)
