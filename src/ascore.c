@@ -216,6 +216,8 @@ static void __socket_handle(as_socket_t *sck)
     int read;
     struct sockaddr_storage addr;
     unsigned int addrl = sizeof(struct sockaddr_storage);
+    if(sck->active == ACTIVE_CLOSE)
+        return;
     if(sck->type == SOCKET_TYPE_TCP)
     {
         if(sck->is_srv == 1)
