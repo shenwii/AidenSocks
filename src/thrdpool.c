@@ -81,7 +81,7 @@ tpool_t *tpool_create(__const__ int size)
         free(tpool);
         return NULL;
     }
-    if(pthread_attr_setstacksize(&tpool->tattr, 4 * PTHREAD_STACK_MIN) != 0)
+    if(pthread_attr_setstacksize(&tpool->tattr, 64 * PTHREAD_STACK_MIN) != 0)
     {
         free(tpool);
         return NULL;
