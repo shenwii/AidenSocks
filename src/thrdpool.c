@@ -105,12 +105,6 @@ tpool_t *tpool_create(__const__ int size)
             return NULL;
         }
     }
-    if(pthread_attr_destroy(&tpool->tattr) != 0)
-    {
-        free(tpool->tids);
-        free(tpool);
-        return NULL;
-    }
     return tpool;
 }
 
@@ -156,6 +150,7 @@ int tpool_destroy(tpool_t *tpool)
         pthread_join(tpool->tids[i], NULL);
     pthread_mutex_destroy(&tpool->lock);
     pthread_cond_destroy(&tpool->signal);
+    pthread_attr_destroy(&tpool->tattr);
     free(tpool->tids);
     free(tpool);
     return 0;
