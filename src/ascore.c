@@ -1,5 +1,4 @@
 #include "ascore.h"
-#include "thrdpool.h"
 #include "log.h"
 
 #include <unistd.h>
@@ -16,6 +15,10 @@
 #include <time.h>
 #include <stdio.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <errno.h>
+
+#define AS_EPOLL_NUM 50
 
 #define SOCKET_LAZY_INIT -1
 
@@ -23,23 +26,29 @@
 #define SOCKET_TYPE_UDP 2
 #define SOCKET_TYPE_UDP_FAKE 4
 
-#define EPOLL_TIMEOUT 100
+#define AS_STATUS_CONNECTED 0x01
+#define AS_STATUS_LISTENED 0x02
+#define AS_STATUS_CLOSED 0x08
+#define AS_STATUS_INEPOLL 0x10
 
-#define EPOLL_ENEVTS_SERVER EPOLLIN
-#define EPOLL_ENEVTS_CLIENT EPOLLIN | EPOLLONESHOT
-
-#define ACTIVE_CLOSE 0x0F
-#define ACTIVE_NOTHING 0
-#define ACTIVE_EVENT 1
+#define EPOLL_TIMEOUT 500
 
 struct as_loop_s
 {
     as_socket_t *header;
     as_socket_t *last;
-    tpool_t *tpool;
-    pthread_mutex_t lock;
     int epfd;
 };
+
+typedef struct as_buffer_s
+{
+    struct as_buffer_s *next;
+    unsigned char *data;
+    size_t len;
+    size_t wrote_len;
+    void *wrote_cb;
+    as_udp_t *udp;
+} as_buffer_t;
 
 struct as_socket_s
 {
@@ -49,9 +58,21 @@ struct as_socket_s
     void *data;
     struct as_socket_s *map;
     int fd;
-    char active;
     char is_srv;
-    char handling;
+    /*
+     * 0x00: nothing
+     * 0x_1: connected
+     * 0x_2: listened
+     * 0x_8: closed;
+     * 0x1_: has epoll event
+     */
+    char status;
+    uint32_t events;
+    struct
+    {
+        as_buffer_t *header;
+        as_buffer_t *last;
+    } write_queue;
     struct sockaddr_storage addr;
     as_socket_destroying_f dest_cb;
 };
@@ -60,38 +81,18 @@ struct as_tcp_s
 {
     as_socket_t sck;
     as_tcp_accepted_f accept_cb;
+    as_tcp_connected_f conned_cb;
     as_tcp_read_f read_cb;
 };
 
 struct as_udp_s
 {
     as_socket_t sck;
+    struct as_udp_s *udp_server;
     time_t udp_timeout;
     as_udp_accepted_f accept_cb;
     as_udp_read_f read_cb;
 };
-
-typedef struct
-{
-    as_tcp_t *server;
-    as_tcp_t *client;
-} __thrd_parm_tcp_conn_t;
-
-typedef struct
-{
-    as_tcp_t *client;
-    char *buf;
-    int size;
-} __thrd_parm_tcp_read_t;
-
-typedef struct
-{
-    as_udp_t *server;
-    as_udp_t *client;
-    char *buf;
-    int size;
-    struct msghdr *msg;
-} __thrd_parm_udp_t;
 
 static int __set_timeout(int fd)
 {
@@ -109,303 +110,63 @@ static int __set_reuseaddr(int fd)
     return setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 }
 
-static void *__thread_tcp_connect_handle(void *args)
+static int __set_non_blocking(int fd)
 {
-    __thrd_parm_tcp_conn_t *parm = (__thrd_parm_tcp_conn_t *) args;
-    if(parm->server->accept_cb == NULL) {
-        as_close((as_socket_t *) parm->client);
-        parm->client->sck.handling = 0;
-        free(parm);
-        return NULL;
-    }
-    if(parm->server->accept_cb(parm->server, parm->client, &parm->client->sck.data, &parm->client->sck.dest_cb) != 0)
-        as_close((as_socket_t *) parm->client);
-    parm->client->sck.handling = 0;
-    free(parm);
-    return NULL;
+    int flags = fcntl(fd, F_GETFL, 0);
+    if(flags == -1)
+        return flags;
+    flags = flags | O_NONBLOCK;
+    return fcntl(fd, F_SETFL, flags);
 }
 
-static void *__thread_tcp_read_handle(void *args)
+static void __as_socket_init(as_socket_t *s, as_loop_t *loop, void *data, as_socket_destroying_f cb)
 {
-    struct epoll_event ev;
-    memset(&ev, 0, sizeof(struct epoll_event));
-    __thrd_parm_tcp_read_t *parm = (__thrd_parm_tcp_read_t *) args;
-    if(parm->client->read_cb == NULL)
-    {
-        as_close((as_socket_t *) parm->client);
-        parm->client->sck.handling = 0;
-        free(parm->buf);
-        free(parm);
-        return NULL;
-    }
-    if(parm->client->read_cb(parm->client, parm->buf, parm->size) != 0)
-    {
-        as_close((as_socket_t *) parm->client);
-    }
-    else
-    {
-        ev.data.fd = parm->client->sck.fd;
-        ev.data.ptr = parm->client;
-        ev.events = EPOLL_ENEVTS_CLIENT;
-        epoll_ctl(parm->client->sck.loop->epfd, EPOLL_CTL_MOD, parm->client->sck.fd, &ev);
-    }
-    parm->client->sck.handling = 0;
-    free(parm->buf);
-    free(parm);
-    return NULL;
-}
-
-static void *__thread_udp_read_handle(void *args)
-{
-    struct epoll_event ev;
-    memset(&ev, 0, sizeof(struct epoll_event));
-    __thrd_parm_udp_t *parm = (__thrd_parm_udp_t *) args;
-    if(parm->client->read_cb == NULL)
-    {
-        as_close((as_socket_t *) parm->client);
-    }
-    else
-    {
-        if(parm->client->read_cb(parm->client, parm->msg, parm->buf, parm->size) != 0)
-        {
-            as_close((as_socket_t *) parm->client);
-        }
-        else
-        {
-            if(parm->client->sck.type != SOCKET_TYPE_UDP_FAKE)
-            {
-                ev.data.fd = parm->client->sck.fd;
-                ev.data.ptr = parm->client;
-                ev.events = EPOLL_ENEVTS_CLIENT;
-                epoll_ctl(parm->client->sck.loop->epfd, EPOLL_CTL_MOD, parm->client->sck.fd, &ev);
-            }
-        }
-    }
-    parm->client->sck.handling = 0;
-    free(parm->msg->msg_iov);
-    free(parm->msg->msg_control);
-    free(parm->msg);
-    free(parm->buf);
-    free(parm);
-    return NULL;
-}
-
-static void *__thread_udp_connect_handle(void *args)
-{
-    __thrd_parm_udp_t *parm = (__thrd_parm_udp_t *) args;
-    if(parm->server->accept_cb == NULL) {
-        as_close((as_socket_t *) parm->client);
-        parm->client->sck.handling = 0;
-        free(parm);
-        return NULL;
-    }
-    if(parm->server->accept_cb(parm->server, parm->client, &parm->client->sck.data, &parm->client->sck.dest_cb) != 0)
-    {
-        as_close((as_socket_t *) parm->client);
-        parm->client->sck.handling = 0;
-        free(parm);
-        return NULL;
-    }
-    return __thread_udp_read_handle(parm);
-}
-
-static void __socket_handle(as_socket_t *sck)
-{
-    int fd;
-    char *buf;
-    int read;
-    struct sockaddr_storage addr;
-    unsigned int addrl = sizeof(struct sockaddr_storage);
-    if(sck->active == ACTIVE_CLOSE)
-        return;
-    if(sck->type == SOCKET_TYPE_TCP)
-    {
-        if(sck->is_srv == 1)
-        {
-            fd = accept(sck->fd, (struct sockaddr *) &addr, &addrl);
-            if(fd > 0)
-            {
-                LOG_DEBUG("fd = %d is inited\n", fd);
-                as_tcp_t *client = as_tcp_init(sck->loop, NULL, NULL);
-                client->sck.fd = fd;
-                memcpy(&client->sck.addr, &addr, addrl);
-                client->sck.handling = 1;
-                __thrd_parm_tcp_conn_t *parm = (__thrd_parm_tcp_conn_t *) malloc(sizeof(__thrd_parm_tcp_conn_t));
-                if(parm == NULL)
-                {
-                    LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-                    abort();
-                }
-                parm->server = (as_tcp_t *) sck;
-                parm->client = client;
-                if(tpool_add_task(sck->loop->tpool, __thread_tcp_connect_handle, (void *) parm) != 0)
-                    abort();
-            }
-        }
-        else
-        {
-            buf = (char *) malloc(AS_BUFFER_SIZE);
-            if(buf == NULL)
-            {
-                LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-                abort();
-            }
-            read = recv(sck->fd, buf, AS_BUFFER_SIZE, MSG_NOSIGNAL);
-            if(read <= 0)
-            {
-                free(buf);
-                as_close(sck);
-            }
-            else
-            {
-                __thrd_parm_tcp_read_t *parm = (__thrd_parm_tcp_read_t *) malloc(sizeof(__thrd_parm_tcp_read_t));
-                if(parm == NULL)
-                {
-                    LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-                    abort();
-                }
-                parm->client = (as_tcp_t *) sck;
-                parm->buf = buf;
-                parm->size = read;
-                sck->handling = 1;
-                if(tpool_add_task(sck->loop->tpool, __thread_tcp_read_handle, (void *) parm) != 0)
-                    abort();
-            }
-        }
-    }
-    if(sck->type == SOCKET_TYPE_UDP)
-    {
-        buf = (char *) malloc(AS_BUFFER_SIZE);
-        if(buf == NULL)
-        {
-            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-            abort();
-        }
-        struct msghdr *msg = (struct msghdr *) malloc(sizeof(struct msghdr));
-        if(msg == NULL)
-        {
-            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-            abort();
-        }
-        char *cntrlbuf = (char *) malloc(64);
-        if(cntrlbuf == NULL)
-        {
-            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-            abort();
-        }
-        struct iovec *iov = (struct iovec *) malloc(sizeof(struct iovec));
-        if(iov == NULL)
-        {
-            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-            abort();
-        }
-        memset(cntrlbuf, '\0', 64);
-        msg->msg_control = cntrlbuf;
-        msg->msg_controllen = 64;
-        msg->msg_name = &addr;
-        msg->msg_namelen = addrl;
-        iov[0].iov_base = buf;
-        iov[0].iov_len = AS_BUFFER_SIZE;
-        msg->msg_iov = iov;
-        msg->msg_iovlen = 1;
-        read = recvmsg(sck->fd, msg, 0);
-        if(read <= 0)
-        {
-            free(iov);
-            free(cntrlbuf);
-            free(msg);
-            free(buf);
-        }
-        else
-        {
-            if(sck->is_srv == 1)
-            {
-                as_udp_t *client = as_udp_init(sck->loop, NULL, NULL);
-                client->sck.type = SOCKET_TYPE_UDP_FAKE;
-                client->sck.fd = sck->fd;
-                client->read_cb = NULL;
-                client->udp_timeout = time(NULL);
-                memcpy(&client->sck.addr, &addr, addrl);
-
-                __thrd_parm_udp_t *parm = (__thrd_parm_udp_t *) malloc(sizeof(__thrd_parm_udp_t));
-                if(parm == NULL)
-                {
-                    LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-                    abort();
-                }
-                parm->server = (as_udp_t *) sck;
-                parm->msg = msg;
-                parm->buf = buf;
-                parm->client = client;
-                parm->size = read;
-                client->sck.handling = 1;
-                if(tpool_add_task(sck->loop->tpool, __thread_udp_connect_handle, (void *) parm) != 0)
-                {
-                    LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-                    abort();
-                }
-            }
-            else
-            {
-                __thrd_parm_udp_t *parm = (__thrd_parm_udp_t *) malloc(sizeof(__thrd_parm_udp_t));
-                if(parm == NULL)
-                {
-                    LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-                    abort();
-                }
-                parm->server = NULL;
-                parm->msg = msg;
-                parm->buf = buf;
-                parm->client = (as_udp_t *) sck;
-                parm->size = read;
-                sck->handling = 1;
-                if(tpool_add_task(sck->loop->tpool, __thread_udp_read_handle, (void *) parm) != 0)
-                    abort();
-            }
-        }
-    }
+    memset(s, 0, sizeof(as_socket_t));
+    s->loop = loop;
+    s->next = NULL;
+    s->data = data;
+    s->map = NULL;
+    //we don't know ipv4 or ipv6
+    //so not create socket in there
+    s->fd = SOCKET_LAZY_INIT;
+    s->dest_cb = cb;
+    s->write_queue.header = NULL;
+    s->write_queue.last = NULL;
 }
 
 static void __socket_close_event(as_loop_t *loop)
 {
+    void *sfree;
     as_socket_t *s, *p;
-    pthread_mutex_lock(&loop->lock);
     s = loop->header;
     p = NULL;
     while(s != NULL)
     {
-        if((s->active == ACTIVE_CLOSE) && s->handling == 0)
+        if(s->status & AS_STATUS_CLOSED)
         {
-            if(s->map != NULL && s->map->handling != 0)
-            {
-                p = s;
-                s = s->next;
-                continue;
-            }
             if(p == NULL)
                 loop->header = s->next;
             else
                 p->next = s->next;
             if(s->next == NULL)
                 loop->last = p;
-            as_socket_t *c = s;
-            s = s->next;
-            if(c->dest_cb != NULL)
+            if(s->dest_cb != NULL)
             {
-                c->dest_cb(c);
+                s->dest_cb(s);
             }
-            if(c->type != SOCKET_TYPE_UDP_FAKE)
+            if(s->type != SOCKET_TYPE_UDP_FAKE)
             {
-                if(c->fd > 0)
+                if(s->fd > 0)
                 {
-                    shutdown(c->fd, SHUT_RDWR);
-                    close(c->fd);
-                    LOG_DEBUG("%d is closed\n", c->fd);
+                    close(s->fd);
+                    LOG_DEBUG("%d is closed\n", s->fd);
                 }
             }
-            if(c->map != NULL)
-                c->map->map = NULL;
-            free(c);
+            if(s->map != NULL)
+                s->map->map = NULL;
+            sfree = s;
+            s = s->next;
+            free(sfree);
             continue;
         }
         if(s->type == SOCKET_TYPE_UDP_FAKE)
@@ -416,7 +177,478 @@ static void __socket_close_event(as_loop_t *loop)
         p = s;
         s = s->next;
     }
-    pthread_mutex_unlock(&loop->lock);
+}
+
+void __tcp_on_accept(as_tcp_t *tcp)
+{
+    struct sockaddr_storage addr;
+    unsigned int addrl = sizeof(struct sockaddr_storage);
+    int fd = accept(tcp->sck.fd, (struct sockaddr *) &addr, &addrl);
+    if(fd <= 0)
+        return;
+    LOG_DEBUG("fd = %d is inited\n", fd);
+    if(__set_non_blocking(tcp->sck.fd) != 0)
+    {
+        LOG_DEBUG("set non block failed\n");
+        return;
+    }
+    if(tcp->accept_cb == NULL)
+        return;
+    as_tcp_t *client = as_tcp_init(tcp->sck.loop, NULL, NULL);
+    client->sck.fd = fd;
+    memcpy(&client->sck.addr, &addr, addrl);
+    client->sck.status = AS_STATUS_CONNECTED;
+    if(tcp->accept_cb(tcp, client, &client->sck.data, &client->sck.dest_cb) != 0)
+        as_close((as_socket_t *) client);
+}
+
+void __tcp_on_read(as_tcp_t *tcp)
+{
+    struct sockaddr_storage addr;
+    unsigned int addrl = sizeof(struct sockaddr_storage);
+    struct msghdr msg;
+    char cntrlbuf[64];
+    struct iovec iov;
+    unsigned char *buf = (unsigned char *) malloc(AS_BUFFER_SIZE);
+    if(buf == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    memset(&msg, '\0', sizeof(struct msghdr));
+    memset(cntrlbuf, '\0', 64);
+    msg.msg_control = cntrlbuf;
+    msg.msg_controllen = 64;
+    msg.msg_name = &addr;
+    msg.msg_namelen = addrl;
+    iov.iov_base = buf;
+    iov.iov_len = AS_BUFFER_SIZE;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    while(1)
+    {
+        ssize_t read = recvmsg(tcp->sck.fd, &msg, MSG_NOSIGNAL);
+        if(read > 0)
+        {
+            if(tcp->read_cb != NULL)
+            {
+                if(tcp->read_cb(tcp, &msg, buf, read) != 0)
+                {
+                    as_close((as_socket_t *) tcp);
+                    free(buf);
+                    return;
+                }
+            }
+            if(tcp->sck.events & EPOLLONESHOT)
+            {
+                tcp->sck.events &= ~(EPOLLONESHOT | EPOLLIN);
+            }
+        }
+        else if(read == 0)
+        {
+            as_close((as_socket_t *) tcp);
+        }
+        else
+        {
+            switch (errno)
+            {
+            case EAGAIN:
+                if(tcp->sck.events & EPOLLONESHOT)
+                {
+                    struct epoll_event ev;
+                    memset(&ev, 0, sizeof(struct epoll_event));
+                    ev.data.fd = tcp->sck.fd;
+                    ev.data.ptr = tcp;
+                    ev.events = tcp->sck.events;
+                    epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
+                }
+                break;
+            case EINTR:
+                continue;
+            default:
+                as_close((as_socket_t *) tcp);
+                break;
+            }
+        }
+        break;
+    }
+    free(buf);
+}
+
+void __tcp_on_connected(as_tcp_t *tcp)
+{
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
+    if(tcp->conned_cb == NULL)
+    {
+        as_close((as_socket_t *) tcp);
+        return;
+    }
+    if(tcp->conned_cb(tcp) != 0)
+    {
+        as_close((as_socket_t *) tcp);
+        return;
+    }
+    tcp->sck.status |= AS_STATUS_CONNECTED;
+    tcp->sck.events &= ~EPOLLOUT;
+    ev.data.fd = tcp->sck.fd;
+    ev.data.ptr = tcp;
+    ev.events = tcp->sck.events;
+    epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
+}
+
+void __tcp_on_write(as_tcp_t *tcp)
+{
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
+    as_buffer_t *buf = tcp->sck.write_queue.header;
+    if(buf != NULL)
+    {
+        if(buf->len == buf->wrote_len)
+        {
+            if(buf->wrote_cb != NULL)
+            {
+                if(((as_tcp_wrote_f) buf->wrote_cb)(tcp, buf->data, buf->len) != 0)
+                {
+                    as_close((as_socket_t *) tcp);
+                    return;
+                }
+            }
+            tcp->sck.write_queue.header = buf->next;
+            free(buf->data);
+            free(buf);
+            buf = tcp->sck.write_queue.header;
+        }
+    }
+    if(buf == NULL)
+    {
+        tcp->sck.events &= ~EPOLLOUT;
+        ev.data.fd = tcp->sck.fd;
+        ev.data.ptr = tcp;
+        ev.events = tcp->sck.events;
+        epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
+        return;
+    }
+    while(1)
+    {
+        ssize_t wrtn = send(tcp->sck.fd, buf->data + buf->wrote_len, buf->len - buf->wrote_len, MSG_NOSIGNAL);
+        if(wrtn > 0)
+        {
+            buf->wrote_len += wrtn;
+        }
+        else if(wrtn == 0)
+        {
+            as_close((as_socket_t *) tcp);
+        }
+        else
+        {
+            switch (errno)
+            {
+            case EAGAIN:
+                break;
+            case EINTR:
+                continue;
+            default:
+                as_close((as_socket_t *) tcp);
+                break;
+            }
+        }
+        break;
+    }
+}
+
+void __udp_on_accept(as_udp_t *udp)
+{
+    struct sockaddr_storage addr;
+    unsigned int addrl = sizeof(struct sockaddr_storage);
+    struct msghdr msg;
+    char cntrlbuf[64];
+    struct iovec iov;
+    unsigned char *buf = (unsigned char *) malloc(AS_BUFFER_SIZE);
+    if(buf == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    memset(&msg, '\0', sizeof(struct msghdr));
+    memset(cntrlbuf, '\0', 64);
+    msg.msg_control = cntrlbuf;
+    msg.msg_controllen = 64;
+    msg.msg_name = &addr;
+    msg.msg_namelen = addrl;
+    iov.iov_base = buf;
+    iov.iov_len = AS_BUFFER_SIZE;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    ssize_t read = recvmsg(udp->sck.fd, &msg, MSG_NOSIGNAL);
+    if(read > 0)
+    {
+        as_udp_t *client = as_udp_init(udp->sck.loop, NULL, NULL);
+        client->sck.type = SOCKET_TYPE_UDP_FAKE;
+        client->udp_server = udp;
+        client->sck.fd = udp->sck.fd;
+        client->udp_timeout = time(NULL);
+        memcpy(&client->sck.addr, &addr, addrl);
+        if(udp->accept_cb != NULL) 
+        {
+            if(udp->accept_cb(udp, client, &client->sck.data, &client->sck.dest_cb) != 0)
+            {
+                as_close((as_socket_t *) client);
+                free(buf);
+                return;
+            }
+        }
+        if(client->read_cb != NULL)
+        {
+            if(udp->read_cb(client, &msg, buf, read) != 0)
+            {
+                as_close((as_socket_t *) client);
+                free(buf);
+                return;
+            }
+        }
+    }
+    free(buf);
+}
+
+void __udp_on_read(as_udp_t *udp)
+{
+    struct sockaddr_storage addr;
+    unsigned int addrl = sizeof(struct sockaddr_storage);
+    struct msghdr msg;
+    char cntrlbuf[64];
+    struct iovec iov;
+    unsigned char *buf = (unsigned char *) malloc(AS_BUFFER_SIZE);
+    if(buf == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    memset(&msg, '\0', sizeof(struct msghdr));
+    memset(cntrlbuf, '\0', 64);
+    msg.msg_control = cntrlbuf;
+    msg.msg_controllen = 64;
+    msg.msg_name = &addr;
+    msg.msg_namelen = addrl;
+    iov.iov_base = buf;
+    iov.iov_len = AS_BUFFER_SIZE;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    while(1)
+    {
+        ssize_t read = recvmsg(udp->sck.fd, &msg, MSG_NOSIGNAL);
+        if(read > 0)
+        {
+            if(udp->read_cb != NULL)
+            {
+                if(udp->read_cb(udp, &msg, buf, read) != 0)
+                {
+                    as_close((as_socket_t *) udp);
+                    free(buf);
+                    return;
+                }
+            }
+            if(udp->sck.events & EPOLLONESHOT)
+            {
+                udp->sck.events &= ~(EPOLLONESHOT | EPOLLIN);
+            }
+        }
+        else if(read == 0)
+        {
+            as_close((as_socket_t *) udp);
+        }
+        else
+        {
+            switch (errno)
+            {
+            case EAGAIN:
+                if(udp->sck.events & EPOLLONESHOT)
+                {
+                    struct epoll_event ev;
+                    memset(&ev, 0, sizeof(struct epoll_event));
+                    ev.data.fd = udp->sck.fd;
+                    ev.data.ptr = udp;
+                    ev.events = udp->sck.events;
+                    epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
+                }
+                break;
+            case EINTR:
+                continue;
+            default:
+                as_close((as_socket_t *) udp);
+                break;
+            }
+        }
+        break;
+    }
+    free(buf);
+}
+
+void __udp_fake_on_write(as_udp_t *udp)
+{
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
+    as_buffer_t *buf = udp->sck.write_queue.header;
+    if(buf != NULL)
+    {
+        if(buf->len == buf->wrote_len)
+        {
+            if(buf->wrote_cb != NULL)
+            {
+                if(((as_udp_wrote_f) buf->wrote_cb)(buf->udp, buf->data, buf->len) != 0)
+                {
+                    as_close((as_socket_t *) buf->udp);
+                    udp->sck.write_queue.header = buf->next;
+                    free(buf->data);
+                    free(buf);
+                    return;
+                }
+            }
+            udp->sck.write_queue.header = buf->next;
+            free(buf->data);
+            free(buf);
+            buf = udp->sck.write_queue.header;
+        }
+    }
+    if(buf == NULL)
+    {
+        udp->sck.events &= ~EPOLLOUT;
+        ev.data.fd = udp->sck.fd;
+        ev.data.ptr = udp;
+        ev.events = udp->sck.events;
+        epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
+        return;
+    }
+    while(1)
+    {
+        ssize_t wrtn = sendto(udp->sck.fd, buf->data + buf->wrote_len, buf->len - buf->wrote_len, MSG_NOSIGNAL, (struct sockaddr *) &buf->udp->sck.addr, sizeof(buf->udp->sck.addr));
+        if(wrtn > 0)
+        {
+            buf->wrote_len += wrtn;
+        }
+        else if(wrtn == 0)
+        {
+            as_close((as_socket_t *) buf->udp);
+            udp->sck.write_queue.header = buf->next;
+            free(buf->data);
+            free(buf);
+        }
+        else
+        {
+            switch (errno)
+            {
+            case EAGAIN:
+                break;
+            case EINTR:
+                continue;
+            default:
+                as_close((as_socket_t *) udp);
+                udp->sck.write_queue.header = buf->next;
+                free(buf->data);
+                free(buf);
+                break;
+            }
+        }
+        break;
+    }
+}
+
+void __udp_on_write(as_udp_t *udp)
+{
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
+    as_buffer_t *buf = udp->sck.write_queue.header;
+    if(buf != NULL)
+    {
+        if(buf->len == buf->wrote_len)
+        {
+            if(buf->wrote_cb != NULL)
+            {
+                if(((as_udp_wrote_f) buf->wrote_cb)(udp, buf->data, buf->len) != 0)
+                {
+                    as_close((as_socket_t *) udp);
+                    return;
+                }
+            }
+            udp->sck.write_queue.header = buf->next;
+            free(buf->data);
+            free(buf);
+            buf = udp->sck.write_queue.header;
+        }
+    }
+    if(buf == NULL)
+    {
+        udp->sck.events &= ~EPOLLOUT;
+        ev.data.fd = udp->sck.fd;
+        ev.data.ptr = udp;
+        ev.events = udp->sck.events;
+        epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
+        return;
+    }
+    while(1)
+    {
+        ssize_t wrtn = sendto(udp->sck.fd, buf->data + buf->wrote_len, buf->len - buf->wrote_len, MSG_NOSIGNAL, (struct sockaddr *) &udp->sck.addr, sizeof(udp->sck.addr));
+        if(wrtn > 0)
+        {
+            buf->wrote_len += wrtn;
+        }
+        else if(wrtn == 0)
+        {
+            as_close((as_socket_t *) udp);
+        }
+        else
+        {
+            switch (errno)
+            {
+            case EAGAIN:
+                break;
+            case EINTR:
+                continue;
+            default:
+                as_close((as_socket_t *) udp);
+                break;
+            }
+        }
+        break;
+    }
+}
+
+void __socket_handle_epollin(as_socket_t *sck)
+{
+    if(sck->type == SOCKET_TYPE_TCP)
+    {
+        if(sck->is_srv == 1)
+            __tcp_on_accept((as_tcp_t *) sck);
+        else
+            __tcp_on_read((as_tcp_t *) sck);
+    }
+    else
+    {
+        if(sck->is_srv == 1)
+            __udp_on_accept((as_udp_t *) sck);
+        else
+            __udp_on_read((as_udp_t *) sck);
+    }
+    
+}
+
+void __socket_handle_epollout(as_socket_t *sck)
+{
+    if(sck->type == SOCKET_TYPE_TCP)
+    {
+        if(sck->status & AS_STATUS_CONNECTED)
+            __tcp_on_write((as_tcp_t *) sck);
+        else
+            __tcp_on_connected((as_tcp_t *) sck);
+    }
+    else
+    {
+        if(sck->is_srv == 1)
+            __udp_fake_on_write((as_udp_t *) sck);
+        else
+            __udp_on_write((as_udp_t *) sck);
+    }
+    
 }
 
 as_loop_t *as_loop_init()
@@ -428,23 +660,11 @@ as_loop_t *as_loop_init()
         abort();
     }
     loop->header = NULL;
-    if(pthread_mutex_init(&loop->lock, NULL) != 0)
-    {
-        free(loop);
-        return NULL;
-    }
-    loop->tpool = tpool_create(AS_THREAD_NUM);
-    if(loop->tpool == NULL)
-    {
-        free(loop);
-        return NULL;
-    }
     loop->epfd = epoll_create1(0);
     if(loop->epfd < 0)
     {
-        tpool_destroy(loop->tpool);
-        free(loop);
-        return NULL;
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
     }
     return loop;
 }
@@ -457,33 +677,24 @@ as_tcp_t *as_tcp_init(as_loop_t *loop, void *data, as_socket_destroying_f cb)
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    pthread_mutex_lock(&loop->lock);
+    __as_socket_init(&tcp->sck, loop, data, cb);
     if(loop->header == NULL)
         loop->header = (as_socket_t *) tcp;
     else
         loop->last->next = (as_socket_t *) tcp;
     loop->last = (as_socket_t *) tcp;
-    tcp->sck.next = NULL;
-    tcp->accept_cb = NULL;
-    tcp->read_cb = NULL;
-    tcp->sck.dest_cb = cb;
-    tcp->sck.loop = loop;
-    tcp->sck.data = data;
-    tcp->sck.map = NULL;
     tcp->sck.type = SOCKET_TYPE_TCP;
-    tcp->sck.is_srv = 0;
-    tcp->sck.active = ACTIVE_NOTHING;
-    //we don't know ipv4 or ipv6
-    //so not create socket in there
-    tcp->sck.fd = SOCKET_LAZY_INIT;
-    tcp->sck.handling = 0;
-    pthread_mutex_unlock(&loop->lock);
+    tcp->accept_cb = NULL;
+    tcp->conned_cb = NULL;
+    tcp->read_cb = NULL;
     return tcp;
 }
 
 int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
 {
     int on = 1;
+    if(tcp->sck.fd != SOCKET_LAZY_INIT)
+        return 1;
     tcp->sck.fd = socket(addr->sa_family, SOCK_STREAM, IPPROTO_TCP);
     if(tcp->sck.fd <= 0)
         return 1;
@@ -492,9 +703,20 @@ int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
     __set_reuseaddr(tcp->sck.fd);
     if(addr->sa_family == AF_INET6)
     {
-        if(flags == AS_TCP_IPV6ONLY)
+        if(flags & AS_TCP_IPV6ONLY)
         {
             if(setsockopt(tcp->sck.fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on)) != 0)
+                return 1;
+        }
+        if(flags & AS_TCP_TPROXY)
+        {
+            //need root
+            if(setsockopt(tcp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
+            {
+                LOG_ERR(MSG_NEED_ROOT);
+                return 1;
+            }
+            if(setsockopt(tcp->sck.fd, SOL_IPV6, IPV6_RECVORIGDSTADDR, &on, sizeof(on)) != 0)
                 return 1;
         }
         if(bind(tcp->sck.fd, addr, sizeof(struct sockaddr_in6)) != 0)
@@ -503,6 +725,17 @@ int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
     }
     else
     {
+        if(flags & AS_TCP_TPROXY)
+        {
+            //need root
+            if(setsockopt(tcp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
+            {
+                LOG_ERR(MSG_NEED_ROOT);
+                return 1;
+            }
+            if(setsockopt(tcp->sck.fd, SOL_IP, IP_RECVORIGDSTADDR, &on, sizeof(on)) != 0)
+                return 1;
+        }
         if(bind(tcp->sck.fd, addr, sizeof(struct sockaddr_in)) != 0)
             return 1;
         memcpy(&tcp->sck.addr, addr, sizeof(struct sockaddr_in));
@@ -518,69 +751,122 @@ int as_tcp_listen(as_tcp_t *tcp, as_tcp_accepted_f cb)
     if(rtn != 0)
         return rtn;
     tcp->sck.is_srv = 1;
-    tcp->sck.active = ACTIVE_EVENT;
+    tcp->sck.status = AS_STATUS_INEPOLL | AS_STATUS_LISTENED;
     tcp->accept_cb = cb;
+    tcp->sck.events = EPOLLIN;
     ev.data.fd = tcp->sck.fd;
     ev.data.ptr = tcp;
-    ev.events = EPOLL_ENEVTS_SERVER;
+    ev.events = tcp->sck.events;
     epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_ADD, tcp->sck.fd, &ev);
     return 0;
 }
 
-int as_tcp_connect(as_tcp_t *tcp, struct sockaddr *addr)
+int as_tcp_connect(as_tcp_t *tcp, struct sockaddr *addr, as_tcp_connected_f cb)
 {
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
     tcp->sck.fd = socket(addr->sa_family, SOCK_STREAM, IPPROTO_TCP);
     LOG_DEBUG("fd = %d is inited\n", tcp->sck.fd);
     if(tcp->sck.fd <= 0)
         return 1;
     __set_timeout(tcp->sck.fd);
+    if(__set_non_blocking(tcp->sck.fd) != 0)
+    {
+        LOG_DEBUG("set non block failed\n");
+        return 1;
+    }
     if(addr->sa_family == AF_INET6)
     {
-        if(connect(tcp->sck.fd, addr, sizeof(struct sockaddr_in6)) != 0)
-        {
-            close(tcp->sck.fd);
+        int rtn = connect(tcp->sck.fd, addr, sizeof(struct sockaddr_in6));
+        if(rtn != 0 && errno != EINPROGRESS)
             return 1;
-        }
         memcpy(&tcp->sck.addr, addr, sizeof(struct sockaddr_in6));
     }
     else
     {
-        if(connect(tcp->sck.fd, addr, sizeof(struct sockaddr_in)) != 0)
-        {
-            close(tcp->sck.fd);
+        int rtn = connect(tcp->sck.fd, addr, sizeof(struct sockaddr_in));
+        if(rtn != 0 && errno != EINPROGRESS)
             return 1;
-        }
         memcpy(&tcp->sck.addr, addr, sizeof(struct sockaddr_in));
     }
-    return 0;
-}
-
-int as_tcp_read_start(as_tcp_t *tcp, as_tcp_read_f cb)
-{
-    struct epoll_event ev;
-    if(tcp->sck.active == ACTIVE_CLOSE)
-        return 2;
-    memset(&ev, 0, sizeof(struct epoll_event));
-    if(tcp->sck.fd <= 0)
-        return 1;
-    tcp->read_cb = cb;
-    tcp->sck.active = ACTIVE_EVENT;
+    tcp->sck.status |= AS_STATUS_INEPOLL;
+    tcp->conned_cb = cb;
+    tcp->sck.events = EPOLLOUT;
     ev.data.fd = tcp->sck.fd;
     ev.data.ptr = tcp;
-    ev.events = EPOLL_ENEVTS_CLIENT;
+    ev.events = tcp->sck.events;
     epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_ADD, tcp->sck.fd, &ev);
     return 0;
 }
 
-int as_tcp_write(as_tcp_t *tcp, __const__ char *buf, __const__ int len)
+int as_tcp_read_start(as_tcp_t *tcp, as_tcp_read_f cb, int flags)
 {
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
+    if(tcp->sck.fd <= 0)
+        return 1;
+    tcp->read_cb = cb;
+    ev.data.fd = tcp->sck.fd;
+    ev.data.ptr = tcp;
+    tcp->sck.events |= EPOLLIN;
+    if(flags & AS_READ_ONESHOT)
+    {
+        tcp->sck.events |= EPOLLONESHOT;
+    }
+    else
+    {
+        tcp->sck.events &= ~EPOLLONESHOT;
+    }
+    ev.events = tcp->sck.events;
+    if(tcp->sck.status & AS_STATUS_INEPOLL)
+    {
+        epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
+    }
+    else
+    {
+        tcp->sck.status |= AS_STATUS_INEPOLL;
+        epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_ADD, tcp->sck.fd, &ev);
+    }
+    return 0;
+}
+
+int as_tcp_write(as_tcp_t *tcp, __const__ unsigned char *buf, __const__ size_t len, as_tcp_wrote_f cb)
+{
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
     if(tcp->sck.fd <= 0)
         return -1;
-    if(tcp->sck.active == ACTIVE_CLOSE)
-        return -1;
-    if(len == 0)
-        return 0;
-    return send(tcp->sck.fd, buf, len, MSG_NOSIGNAL);
+    as_buffer_t *asbuf = (as_buffer_t *) malloc(sizeof(as_buffer_t));
+    if(asbuf == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    asbuf->data = (unsigned char *) malloc(len);
+    if(asbuf->data == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    memcpy(asbuf->data, buf, len);
+    asbuf->len = len;
+    asbuf->wrote_len = 0;
+    asbuf->wrote_cb = cb;
+    asbuf->next = NULL;
+    ev.data.fd = tcp->sck.fd;
+    ev.data.ptr = tcp;
+    tcp->sck.events |= EPOLLOUT;
+    ev.events = tcp->sck.events;
+    if(tcp->sck.status & AS_STATUS_INEPOLL)
+    {
+        epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
+    }
+    else
+    {
+        tcp->sck.status |= AS_STATUS_INEPOLL;
+        epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_ADD, tcp->sck.fd, &ev);
+    }
+    return 0;
 }
 
 as_udp_t *as_udp_init(as_loop_t *loop, void *data, as_socket_destroying_f cb)
@@ -591,26 +877,17 @@ as_udp_t *as_udp_init(as_loop_t *loop, void *data, as_socket_destroying_f cb)
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    pthread_mutex_lock(&loop->lock);
+    __as_socket_init(&udp->sck, loop, data, cb);
     if(loop->header == NULL)
         loop->header = (as_socket_t *) udp;
     else
         loop->last->next = (as_socket_t *) udp;
     loop->last = (as_socket_t *) udp;
-    udp->sck.next = NULL;
     udp->udp_timeout = time(NULL);
-    udp->sck.dest_cb = cb;
-    udp->sck.loop = loop;
-    udp->sck.data = data;
-    udp->sck.map = NULL;
     udp->sck.type = SOCKET_TYPE_UDP;
-    udp->sck.is_srv = 0;
-    udp->sck.active = ACTIVE_NOTHING;
-    //we don't know ipv4 or ipv6
-    //so not create socket in there
-    udp->sck.fd = SOCKET_LAZY_INIT;
-    udp->sck.handling = 0;
-    pthread_mutex_unlock(&loop->lock);
+    udp->udp_server = NULL;
+    udp->accept_cb = NULL;
+    udp->read_cb = NULL;
     return udp;
 }
 
@@ -625,14 +902,19 @@ int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
         return 1;
     __set_timeout(udp->sck.fd);
     __set_reuseaddr(udp->sck.fd);
+    if(__set_non_blocking(udp->sck.fd) != 0)
+    {
+        LOG_DEBUG("set non block failed\n");
+        return 1;
+    }
     if(addr->sa_family == AF_INET6)
     {
-        if((flags & 1) == 1)
+        if(flags & AS_UDP_IPV6ONLY)
         {
             if(setsockopt(udp->sck.fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on)) != 0)
                 return 1;
         }
-        if(((flags >> 1) & 1) == 1)
+        if(flags & AS_UDP_TPROXY)
         {
             //need root
             if(setsockopt(udp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
@@ -649,7 +931,7 @@ int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
     }
     else
     {
-        if(((flags >> 1) & 1) == 1)
+        if(flags & AS_UDP_TPROXY)
         {
             //need root
             if(setsockopt(udp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
@@ -672,11 +954,12 @@ int as_udp_listen(as_udp_t *udp, as_udp_accepted_f cb)
     struct epoll_event ev;
     memset(&ev, 0, sizeof(struct epoll_event));
     udp->sck.is_srv = 1;
+    udp->sck.status = AS_STATUS_INEPOLL | AS_STATUS_LISTENED;
     udp->accept_cb = cb;
-    udp->sck.active = ACTIVE_EVENT;
+    udp->sck.events = EPOLLIN;
     ev.data.fd = udp->sck.fd;
     ev.data.ptr = udp;
-    ev.events = EPOLL_ENEVTS_SERVER;
+    ev.events = udp->sck.events;
     epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_ADD, udp->sck.fd, &ev);
     return 0;
 }
@@ -690,6 +973,11 @@ int as_udp_connect(as_udp_t *udp, struct sockaddr *addr)
     if(udp->sck.fd <= 0)
         return 1;
     __set_timeout(udp->sck.fd);
+    if(__set_non_blocking(udp->sck.fd) != 0)
+    {
+        LOG_DEBUG("set non block failed\n");
+        return 1;
+    }
     if(addr->sa_family == AF_INET6)
     {
         memcpy(&udp->sck.addr, addr, sizeof(struct sockaddr_in6));
@@ -701,32 +989,106 @@ int as_udp_connect(as_udp_t *udp, struct sockaddr *addr)
     return 0;
 }
 
-int as_udp_read_start(as_udp_t *udp, as_udp_read_f cb)
+int as_udp_read_start(as_udp_t *udp, as_udp_read_f cb, int flags)
 {
     struct epoll_event ev;
-    if(udp->sck.active == ACTIVE_CLOSE)
-        return 2;
     memset(&ev, 0, sizeof(struct epoll_event));
     if(udp->sck.fd <= 0)
         return 1;
     udp->read_cb = cb;
     if(udp->sck.type == SOCKET_TYPE_UDP_FAKE)
         return 0;
-    udp->sck.active = ACTIVE_EVENT;
     ev.data.fd = udp->sck.fd;
     ev.data.ptr = udp;
-    ev.events = EPOLL_ENEVTS_CLIENT;
-    epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_ADD, udp->sck.fd, &ev);
+
+
+    udp->sck.events |= EPOLLIN;
+    if(flags & AS_READ_ONESHOT)
+    {
+        udp->sck.events |= EPOLLONESHOT;
+    }
+    else
+    {
+        udp->sck.events &= ~EPOLLONESHOT;
+    }
+    ev.events = udp->sck.events;
+    if(udp->sck.status & AS_STATUS_INEPOLL)
+    {
+        epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
+    }
+    else
+    {
+        udp->sck.status |= AS_STATUS_INEPOLL;
+        epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_ADD, udp->sck.fd, &ev);
+    }
     return 0;
 }
 
-int as_udp_write(as_udp_t *udp, __const__ char *buf, __const__ int len)
+int as_udp_write(as_udp_t *udp, __const__ unsigned char *buf, __const__ size_t len, as_udp_wrote_f cb)
 {
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
     if(udp->sck.type == SOCKET_TYPE_UDP_FAKE)
-        udp->udp_timeout = time(NULL);
-    if(len == 0)
+    {
+        as_udp_t *udp_server = udp->udp_server;
+        as_buffer_t *asbuf = (as_buffer_t *) malloc(sizeof(as_buffer_t));
+        if(asbuf == NULL)
+        {
+            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+            abort();
+        }
+        asbuf->data = (unsigned char *) malloc(len);
+        if(asbuf->data == NULL)
+        {
+            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+            abort();
+        }
+        memcpy(asbuf->data, buf, len);
+        asbuf->len = len;
+        asbuf->wrote_len = 0;
+        asbuf->wrote_cb = cb;
+        asbuf->next = NULL;
+        asbuf->udp = udp;
+        ev.data.fd = udp_server->sck.fd;
+        ev.data.ptr = udp_server;
+        udp_server->sck.events |= EPOLLOUT;
+        ev.events = udp_server->sck.events;
+        epoll_ctl(udp_server->sck.loop->epfd, EPOLL_CTL_MOD, udp_server->sck.fd, &ev);
         return 0;
-    return sendto(udp->sck.fd, buf, len, 0, (struct sockaddr *) &udp->sck.addr, sizeof(struct sockaddr_storage));
+    }
+    if(udp->sck.fd <= 0)
+        return -1;
+    as_buffer_t *asbuf = (as_buffer_t *) malloc(sizeof(as_buffer_t));
+    if(asbuf == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    asbuf->data = (unsigned char *) malloc(len);
+    if(asbuf->data == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    memcpy(asbuf->data, buf, len);
+    asbuf->len = len;
+    asbuf->wrote_len = 0;
+    asbuf->wrote_cb = cb;
+    asbuf->next = NULL;
+    ev.data.fd = udp->sck.fd;
+    ev.data.ptr = udp;
+    udp->sck.events |= EPOLLOUT;
+    ev.events = udp->sck.events;
+    if(udp->sck.status & AS_STATUS_INEPOLL)
+    {
+        epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
+    }
+    else
+    {
+        udp->sck.status |= AS_STATUS_INEPOLL;
+        epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_ADD, udp->sck.fd, &ev);
+    }
+    return 0;
 }
 
 void as_socket_map_bind(as_socket_t *sck1, as_socket_t *sck2)
@@ -735,22 +1097,17 @@ void as_socket_map_bind(as_socket_t *sck1, as_socket_t *sck2)
     sck2->map = sck1;
 }
 
-int as_thread_task(as_socket_t *sck, void *(*fun)(void *), void *arg)
-{
-    return tpool_add_task(sck->loop->tpool, fun, arg);
-}
-
 int as_close(as_socket_t *sck)
 {
-    if(sck->active == ACTIVE_EVENT && sck->fd > 0)
+    if(sck->status & AS_STATUS_INEPOLL)
         epoll_ctl(sck->loop->epfd, EPOLL_CTL_DEL, sck->fd, NULL);
-    sck->active = ACTIVE_CLOSE;
+    sck->status |= AS_STATUS_CLOSED;
     if(sck->map != NULL)
     {
         as_socket_t *sckmap = sck->map;
-        if(sckmap->active == ACTIVE_EVENT && sckmap->fd > 0)
+        if(sckmap->status & AS_STATUS_INEPOLL)
             epoll_ctl(sckmap->loop->epfd, EPOLL_CTL_DEL, sckmap->fd, NULL);
-        sckmap->active = ACTIVE_CLOSE;
+        sckmap->status |= AS_STATUS_CLOSED;
     }
     return 0;
 }
@@ -791,11 +1148,18 @@ int as_loop_run(as_loop_t *loop)
         for(int i = 0 ; i < wait_count; i++)
         {
             uint32_t events_flags = events[i].events;
-            if(events_flags & EPOLLERR || events_flags & EPOLLHUP || (!(events_flags & EPOLLIN))) {
+            if(events_flags & EPOLLERR || events_flags & EPOLLHUP)
+            {
                 as_close((as_socket_t *) events[i].data.ptr);
                 continue;
             }
-            __socket_handle((as_socket_t *) events[i].data.ptr);
+            as_socket_t *sck = (as_socket_t *) events[i].data.ptr;
+            if(sck->status & AS_STATUS_CLOSED)
+                continue;
+            if(events_flags & EPOLLIN)
+                __socket_handle_epollin(sck);
+            if(events_flags & EPOLLOUT)
+                __socket_handle_epollout(sck);
         }
     }
     return 0;
