@@ -68,6 +68,7 @@ struct as_socket_s
      */
     char status;
     uint32_t events;
+    uint32_t read_flags;
     struct
     {
         as_buffer_t *header;
@@ -119,19 +120,38 @@ static int __set_non_blocking(int fd)
     return fcntl(fd, F_SETFL, flags);
 }
 
-static void __as_socket_init(as_socket_t *s, as_loop_t *loop, void *data, as_socket_destroying_f cb)
+static int __get_socket_error(int fd, char *serrno)
 {
-    memset(s, 0, sizeof(as_socket_t));
-    s->loop = loop;
-    s->next = NULL;
-    s->data = data;
-    s->map = NULL;
+	int len = 1;
+    return getsockopt(fd, SOL_SOCKET, SO_ERROR, serrno, &len);
+}
+
+static void __as_socket_init(as_socket_t *sck, as_loop_t *loop, void *data, as_socket_destroying_f cb)
+{
+    memset(sck, 0, sizeof(as_socket_t));
+    sck->loop = loop;
+    sck->next = NULL;
+    sck->data = data;
+    sck->map = NULL;
     //we don't know ipv4 or ipv6
     //so not create socket in there
-    s->fd = SOCKET_LAZY_INIT;
-    s->dest_cb = cb;
-    s->write_queue.header = NULL;
-    s->write_queue.last = NULL;
+    sck->fd = SOCKET_LAZY_INIT;
+    sck->dest_cb = cb;
+    sck->write_queue.header = NULL;
+    sck->write_queue.last = NULL;
+}
+
+static void __free_write_queue(as_socket_t *sck)
+{
+    void *p;
+    as_buffer_t *asbuf = sck->write_queue.header;
+    while(asbuf != NULL)
+    {
+        free(asbuf->data);
+        p = asbuf;
+        asbuf = asbuf->next;
+        free(p);
+    }
 }
 
 static void __socket_close_event(as_loop_t *loop)
@@ -150,6 +170,7 @@ static void __socket_close_event(as_loop_t *loop)
                 p->next = s->next;
             if(s->next == NULL)
                 loop->last = p;
+            __free_write_queue(s);
             if(s->dest_cb != NULL)
             {
                 s->dest_cb(s);
@@ -230,6 +251,8 @@ void __tcp_on_read(as_tcp_t *tcp)
         ssize_t read = recvmsg(tcp->sck.fd, &msg, MSG_NOSIGNAL);
         if(read > 0)
         {
+            if(tcp->sck.read_flags & AS_READ_ONESHOT)
+                tcp->sck.events &= ~EPOLLIN;
             if(tcp->read_cb != NULL)
             {
                 if(tcp->read_cb(tcp, &msg, buf, read) != 0)
@@ -238,10 +261,6 @@ void __tcp_on_read(as_tcp_t *tcp)
                     free(buf);
                     return;
                 }
-            }
-            if(tcp->sck.events & EPOLLONESHOT)
-            {
-                tcp->sck.events &= ~(EPOLLONESHOT | EPOLLIN);
             }
         }
         else if(read == 0)
@@ -253,15 +272,6 @@ void __tcp_on_read(as_tcp_t *tcp)
             switch (errno)
             {
             case EAGAIN:
-                if(tcp->sck.events & EPOLLONESHOT)
-                {
-                    struct epoll_event ev;
-                    memset(&ev, 0, sizeof(struct epoll_event));
-                    ev.data.fd = tcp->sck.fd;
-                    ev.data.ptr = tcp;
-                    ev.events = tcp->sck.events;
-                    epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
-                }
                 break;
             case EINTR:
                 continue;
@@ -279,26 +289,25 @@ void __tcp_on_connected(as_tcp_t *tcp)
 {
     struct epoll_event ev;
     memset(&ev, 0, sizeof(struct epoll_event));
-    if(tcp->conned_cb == NULL)
-    {
-        as_close((as_socket_t *) tcp);
-        return;
-    }
-    if(tcp->conned_cb(tcp) != 0)
-    {
-        as_close((as_socket_t *) tcp);
-        return;
-    }
     tcp->sck.status |= AS_STATUS_CONNECTED;
     tcp->sck.events &= ~EPOLLOUT;
     ev.data.fd = tcp->sck.fd;
     ev.data.ptr = tcp;
     ev.events = tcp->sck.events;
     epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
+    if(tcp->conned_cb != NULL)
+    {
+        if(tcp->conned_cb(tcp, 0) != 0)
+        {
+            as_close((as_socket_t *) tcp);
+            return;
+        }
+    }
 }
 
 void __tcp_on_write(as_tcp_t *tcp)
 {
+    LOG_DEBUG("write\n");
     struct epoll_event ev;
     memset(&ev, 0, sizeof(struct epoll_event));
     as_buffer_t *buf = tcp->sck.write_queue.header;
@@ -439,6 +448,8 @@ void __udp_on_read(as_udp_t *udp)
         ssize_t read = recvmsg(udp->sck.fd, &msg, MSG_NOSIGNAL);
         if(read > 0)
         {
+            if(udp->sck.read_flags & AS_READ_ONESHOT)
+                udp->sck.events &= ~EPOLLIN;
             if(udp->read_cb != NULL)
             {
                 if(udp->read_cb(udp, &msg, buf, read) != 0)
@@ -447,10 +458,6 @@ void __udp_on_read(as_udp_t *udp)
                     free(buf);
                     return;
                 }
-            }
-            if(udp->sck.events & EPOLLONESHOT)
-            {
-                udp->sck.events &= ~(EPOLLONESHOT | EPOLLIN);
             }
         }
         else if(read == 0)
@@ -462,15 +469,6 @@ void __udp_on_read(as_udp_t *udp)
             switch (errno)
             {
             case EAGAIN:
-                if(udp->sck.events & EPOLLONESHOT)
-                {
-                    struct epoll_event ev;
-                    memset(&ev, 0, sizeof(struct epoll_event));
-                    ev.data.fd = udp->sck.fd;
-                    ev.data.ptr = udp;
-                    ev.events = udp->sck.events;
-                    epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
-                }
                 break;
             case EINTR:
                 continue;
@@ -493,6 +491,7 @@ void __udp_fake_on_write(as_udp_t *udp)
     {
         if(buf->len == buf->wrote_len)
         {
+            buf->udp->udp_timeout = time(NULL);
             if(buf->wrote_cb != NULL)
             {
                 if(((as_udp_wrote_f) buf->wrote_cb)(buf->udp, buf->data, buf->len) != 0)
@@ -809,14 +808,7 @@ int as_tcp_read_start(as_tcp_t *tcp, as_tcp_read_f cb, int flags)
     ev.data.fd = tcp->sck.fd;
     ev.data.ptr = tcp;
     tcp->sck.events |= EPOLLIN;
-    if(flags & AS_READ_ONESHOT)
-    {
-        tcp->sck.events |= EPOLLONESHOT;
-    }
-    else
-    {
-        tcp->sck.events &= ~EPOLLONESHOT;
-    }
+    tcp->sck.read_flags = AS_READ_ONESHOT;
     ev.events = tcp->sck.events;
     if(tcp->sck.status & AS_STATUS_INEPOLL)
     {
@@ -853,6 +845,11 @@ int as_tcp_write(as_tcp_t *tcp, __const__ unsigned char *buf, __const__ size_t l
     asbuf->wrote_len = 0;
     asbuf->wrote_cb = cb;
     asbuf->next = NULL;
+    if(tcp->sck.write_queue.header == NULL)
+        tcp->sck.write_queue.header = asbuf;
+    else
+        tcp->sck.write_queue.last->next = asbuf;
+    tcp->sck.write_queue.last = asbuf;
     ev.data.fd = tcp->sck.fd;
     ev.data.ptr = tcp;
     tcp->sck.events |= EPOLLOUT;
@@ -1000,17 +997,8 @@ int as_udp_read_start(as_udp_t *udp, as_udp_read_f cb, int flags)
         return 0;
     ev.data.fd = udp->sck.fd;
     ev.data.ptr = udp;
-
-
     udp->sck.events |= EPOLLIN;
-    if(flags & AS_READ_ONESHOT)
-    {
-        udp->sck.events |= EPOLLONESHOT;
-    }
-    else
-    {
-        udp->sck.events &= ~EPOLLONESHOT;
-    }
+    udp->sck.read_flags = flags;
     ev.events = udp->sck.events;
     if(udp->sck.status & AS_STATUS_INEPOLL)
     {
@@ -1049,6 +1037,11 @@ int as_udp_write(as_udp_t *udp, __const__ unsigned char *buf, __const__ size_t l
         asbuf->wrote_cb = cb;
         asbuf->next = NULL;
         asbuf->udp = udp;
+        if(udp_server->sck.write_queue.header == NULL)
+            udp_server->sck.write_queue.header = asbuf;
+        else
+            udp_server->sck.write_queue.last->next = asbuf;
+        udp_server->sck.write_queue.last = asbuf;
         ev.data.fd = udp_server->sck.fd;
         ev.data.ptr = udp_server;
         udp_server->sck.events |= EPOLLOUT;
@@ -1132,6 +1125,11 @@ int as_fd(as_socket_t *sck)
     return sck->fd;
 }
 
+int as_socket_error(as_socket_t *sck, char *serrno)
+{
+    return __get_socket_error(sck->fd, serrno);
+}
+
 struct sockaddr_storage *as_dest_addr(as_socket_t *sck)
 {
     return &sck->addr;
@@ -1148,12 +1146,23 @@ int as_loop_run(as_loop_t *loop)
         for(int i = 0 ; i < wait_count; i++)
         {
             uint32_t events_flags = events[i].events;
+            as_socket_t *sck = (as_socket_t *) events[i].data.ptr;
             if(events_flags & EPOLLERR || events_flags & EPOLLHUP)
             {
-                as_close((as_socket_t *) events[i].data.ptr);
+                if(sck->type == SOCKET_TYPE_TCP && sck->is_srv == 0 && sck->events & EPOLLOUT && !(sck->status & AS_STATUS_CONNECTED))
+                {
+                    as_tcp_t *tcp = (as_tcp_t *) sck;
+                    if(tcp->conned_cb != NULL)
+                        tcp->conned_cb(tcp, 1);
+                }
+                else
+                {
+                    LOG_DEBUG("a\n");
+                    as_close((as_socket_t *) events[i].data.ptr);
+                }
                 continue;
             }
-            as_socket_t *sck = (as_socket_t *) events[i].data.ptr;
+            
             if(sck->status & AS_STATUS_CLOSED)
                 continue;
             if(events_flags & EPOLLIN)

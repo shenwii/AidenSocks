@@ -25,7 +25,7 @@ typedef struct as_udp_s as_udp_t;
 typedef int (*as_socket_destroying_f)(as_socket_t *);
 
 typedef int (*as_tcp_accepted_f)(as_tcp_t *, as_tcp_t *, void **, as_socket_destroying_f *);
-typedef int (*as_tcp_connected_f)(as_tcp_t *);
+typedef int (*as_tcp_connected_f)(as_tcp_t *, char);
 typedef int (*as_tcp_read_f)(as_tcp_t *, __const__ struct msghdr *, __const__ unsigned char *, __const__ size_t);
 typedef int (*as_tcp_wrote_f)(as_tcp_t *, __const__ unsigned char *, __const__ size_t);
 
@@ -70,6 +70,8 @@ as_loop_t *as_socket_loop(as_socket_t *sck);
 as_socket_t *as_socket_map(as_socket_t *sck);
 
 int as_fd(as_socket_t *sck);
+
+int as_socket_error(as_socket_t *sck, char *serrno);
 
 struct sockaddr_storage *as_dest_addr(as_socket_t *sck);
 
