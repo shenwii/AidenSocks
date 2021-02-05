@@ -409,7 +409,7 @@ void __udp_on_accept(as_udp_t *udp)
         }
         if(client->read_cb != NULL)
         {
-            if(udp->read_cb(client, &msg, buf, read) != 0)
+            if(client->read_cb(client, &msg, buf, read) != 0)
             {
                 as_close((as_socket_t *) client);
                 free(buf);
@@ -765,9 +765,9 @@ int as_tcp_connect(as_tcp_t *tcp, struct sockaddr *addr, as_tcp_connected_f cb)
     struct epoll_event ev;
     memset(&ev, 0, sizeof(struct epoll_event));
     tcp->sck.fd = socket(addr->sa_family, SOCK_STREAM, IPPROTO_TCP);
-    LOG_DEBUG("fd = %d is inited\n", tcp->sck.fd);
     if(tcp->sck.fd <= 0)
         return 1;
+    LOG_DEBUG("fd = %d is inited\n", tcp->sck.fd);
     __set_timeout(tcp->sck.fd);
     if(__set_non_blocking(tcp->sck.fd) != 0)
     {
@@ -894,9 +894,9 @@ int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
     if(udp->sck.fd != SOCKET_LAZY_INIT)
         return 1;
     udp->sck.fd = socket(addr->sa_family, SOCK_DGRAM, IPPROTO_UDP);
-    LOG_DEBUG("fd = %d is inited\n", udp->sck.fd);
     if(udp->sck.fd <= 0)
         return 1;
+    LOG_DEBUG("fd = %d is inited\n", udp->sck.fd);
     __set_timeout(udp->sck.fd);
     __set_reuseaddr(udp->sck.fd);
     if(__set_non_blocking(udp->sck.fd) != 0)
@@ -966,9 +966,9 @@ int as_udp_connect(as_udp_t *udp, struct sockaddr *addr)
     if(udp->sck.fd != SOCKET_LAZY_INIT)
         return 1;
     udp->sck.fd = socket(addr->sa_family, SOCK_DGRAM, IPPROTO_UDP);
-    LOG_DEBUG("fd = %d is inited\n", udp->sck.fd);
     if(udp->sck.fd <= 0)
         return 1;
+    LOG_DEBUG("fd = %d is inited\n", udp->sck.fd);
     __set_timeout(udp->sck.fd);
     if(__set_non_blocking(udp->sck.fd) != 0)
     {
@@ -1068,6 +1068,11 @@ int as_udp_write(as_udp_t *udp, __const__ unsigned char *buf, __const__ size_t l
     asbuf->wrote_len = 0;
     asbuf->wrote_cb = cb;
     asbuf->next = NULL;
+    if(udp->sck.write_queue.header == NULL)
+        udp->sck.write_queue.header = asbuf;
+    else
+        udp->sck.write_queue.last->next = asbuf;
+    udp->sck.write_queue.last = asbuf;
     ev.data.fd = udp->sck.fd;
     ev.data.ptr = udp;
     udp->sck.events |= EPOLLOUT;
@@ -1079,6 +1084,7 @@ int as_udp_write(as_udp_t *udp, __const__ unsigned char *buf, __const__ size_t l
     else
     {
         udp->sck.status |= AS_STATUS_INEPOLL;
+        LOG_DEBUG("add event\n");
         epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_ADD, udp->sck.fd, &ev);
     }
     return 0;
@@ -1161,8 +1167,7 @@ int as_loop_run(as_loop_t *loop)
                     as_close((as_socket_t *) events[i].data.ptr);
                 }
                 continue;
-            }
-            
+            }            
             if(sck->status & AS_STATUS_CLOSED)
                 continue;
             if(events_flags & EPOLLIN)
