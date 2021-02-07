@@ -27,7 +27,7 @@
  *         0x21: udp send to request
  *         0x22: udp send request
  */
-int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned char *indata, __const__ int inlen, __const__ unsigned char *aes_key, unsigned char *outdata, int *outlen)
+int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned char *indata, __const__ size_t inlen, __const__ unsigned char *aes_key, unsigned char *outdata, int *outlen)
 {
     static char fst = 0;
     unsigned char *tmp;
@@ -42,7 +42,7 @@ int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned c
     int mindatalen = AES_ENCODE_LEN(inlen);
     int randlen = rand() % ASP_MAX_RANDOM_LENGTH + 1;
     if(inlen != 0)
-        header.crc32 = CRC32((unsigned char *) indata, inlen);
+        header.crc32 = CRC32(indata, inlen);
     header.data_total_len = htonl(mindatalen + randlen);
     header.data_len = htonl(inlen);
     header.status = status;
@@ -50,16 +50,16 @@ int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned c
     *outlen = headerlen + mindatalen + randlen;
     aes_encrypt((unsigned char *) &header, sizeof(asp_header_t), outdata, aes_key);
     if(inlen != 0)
-        aes_encrypt((unsigned char *) indata, inlen, outdata + headerlen, aes_key);
+        aes_encrypt(indata, inlen, outdata + headerlen, aes_key);
     tmp = outdata + headerlen + mindatalen;
     while(randlen--)
         *tmp++ = rand() % 256;
     return 0;
 }
 
-int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__ int inlen, __const__ unsigned char *aes_key, asp_buffer_t *buf, asp_decrypt_callback_f cb)
+int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__ size_t inlen, __const__ unsigned char *aes_key, asp_buffer_t *buf, asp_decrypt_callback_f cb)
 {
-    char *tbuf;
+    unsigned char *tbuf;
     int tlen;
     asp_header_t header;
     uint32_t data_total_len;
@@ -76,8 +76,8 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
     }
     else
     {
-        buf->buf = (char *) realloc(buf->buf, inlen + buf->len);
-        char *t = (char *) buf->buf;
+        buf->buf = (unsigned char *) realloc(buf->buf, inlen + buf->len);
+        unsigned char *t = buf->buf;
         t += buf->len;
         memcpy(t, indata, inlen);
         buf->len += inlen;
@@ -88,7 +88,7 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
     {
         if(tlen <= headerlen)
             break;
-        aes_decrypt((unsigned char *) tbuf, sizeof(asp_header_t), (unsigned char *) &header, aes_key);
+        aes_decrypt(tbuf, sizeof(asp_header_t), (unsigned char *) &header, aes_key);
         data_total_len = ntohl(header.data_total_len);
         data_len = ntohl(header.data_len);
         if(data_total_len < AES_ENCODE_LEN(data_len))
@@ -99,23 +99,23 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
         }
         if(tlen < headerlen + data_total_len)
             break;
-        char *ucdata;
+        unsigned char *ucdata;
         if(data_len == 0)
         {
             ucdata = NULL;
         }
         else
         {
-            ucdata = (char *) malloc(AES_ENCODE_LEN(data_len));
+            ucdata = (unsigned char *) malloc(AES_ENCODE_LEN(data_len));
             if(ucdata == NULL)
             {
                 LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
                 abort();
             }
-            aes_decrypt((unsigned char *) tbuf + headerlen, data_len, (unsigned char *) ucdata, aes_key);
+            aes_decrypt(tbuf + headerlen, data_len, ucdata, aes_key);
         }
         if((ucdata == NULL && header.crc32 != 0)
-            || (CRC32((unsigned char *) ucdata, data_len) != header.crc32))
+            || (CRC32(ucdata, data_len) != header.crc32))
         {
             rtn = 2;
             tlen = 0;
@@ -146,8 +146,8 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
     }
     if(buf->len != tlen)
     {
-        char *wf_buf = buf->buf;
-        buf->buf = (char *) malloc(tlen);
+        unsigned char *wf_buf = buf->buf;
+        buf->buf = (unsigned char *) malloc(tlen);
         memcpy(buf->buf, tbuf, tlen);
         buf->len = tlen;
         free(wf_buf);

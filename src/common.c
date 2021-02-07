@@ -87,7 +87,7 @@ char *address_str(struct sockaddr* addr)
     return addstr;
 }
 
-int parse_asp_address(__const__ char *buf, __const__ int len, struct sockaddr* addr)
+int parse_asp_address(__const__ unsigned char *buf, __const__ int len, struct sockaddr* addr)
 {
     uint16_t *port;
     char dlen;

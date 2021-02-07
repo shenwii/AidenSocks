@@ -9,25 +9,39 @@
 #include "log.h"
 #include "asprot.h"
 
+typedef struct
+{
+    asp_buffer_t as_buf;
+    char proc;
+} __as_data_t;
+
 unsigned char aes_key[AES_KEY_LEN / 8];
 
 static int __destroy(as_socket_t *sck);
 
-static int __tcp_client_on_connect(as_tcp_t *srv, as_tcp_t *clnt, void **data, as_socket_destroying_f *cb);
+static int __tcp_client_on_accepted(as_tcp_t *srv, as_tcp_t *clnt, void **data, as_socket_destroying_f *cb);
 
-static int __tcp_client_on_read(as_tcp_t *clnt, __const__ char *buf, __const__ int len);
+static int __tcp_client_on_read(as_tcp_t *clnt, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ char *buf, __const__ int len);
+static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __tcp_remote_on_read(as_tcp_t *remote, __const__ char *buf, __const__ int len);
+static int __tcp_client_on_wrote(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __udp_client_on_connect(as_udp_t *srv, as_udp_t *clnt, void **data, as_socket_destroying_f *cb);
+static int __tcp_remote_on_connected(as_tcp_t *remote, char status);
 
-static int __udp_client_on_read(as_udp_t *clnt, __const__ struct msghdr *msg, __const__ char *buf, __const__ int len);
+static int __tcp_remote_on_read(as_tcp_t *remote, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ char *buf, __const__ int len);
+static int __tcp_remote_on_wrote(as_tcp_t *remote, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, __const__ char *buf, __const__ int len);
+static int __udp_client_on_accepted(as_udp_t *srv, as_udp_t *clnt, void **data, as_socket_destroying_f *cb);
+
+static int __udp_client_on_read(as_udp_t *clnt, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len);
+
+static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len);
+
+static int __udp_client_on_wrote(as_udp_t *clnt, __const__ unsigned char *buf, __const__ size_t len);
+
+static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len);
 
 static int __usage(char *prog)
 {
@@ -82,7 +96,7 @@ int main(int argc, char **argv)
         LOG_ERR(MSG_TCP_BIND, conf.baddr6, conf.bport);
         return 1;
     }
-    if(as_tcp_listen(tcp, __tcp_client_on_connect) != 0)
+    if(as_tcp_listen(tcp, __tcp_client_on_accepted) != 0)
     {
         LOG_ERR(MSG_TCP_LISTENED);
         return 1;
@@ -95,7 +109,7 @@ int main(int argc, char **argv)
         LOG_ERR(MSG_TCP_BIND, conf.baddr, conf.bport);
         return 1;
     }
-    if(as_tcp_listen(tcp, __tcp_client_on_connect) != 0)
+    if(as_tcp_listen(tcp, __tcp_client_on_accepted) != 0)
     {
         LOG_ERR(MSG_TCP_LISTENED);
         return 1;
@@ -108,7 +122,7 @@ int main(int argc, char **argv)
         LOG_ERR(MSG_UDP_BIND, conf.baddr6, conf.bport);
         return 1;
     }
-    if(as_udp_listen(udp, __udp_client_on_connect) != 0)
+    if(as_udp_listen(udp, __udp_client_on_accepted) != 0)
     {
         LOG_ERR(MSG_UDP_LISTENED);
         return 1;
@@ -122,7 +136,7 @@ int main(int argc, char **argv)
         LOG_ERR(MSG_UDP_BIND, conf.baddr, conf.bport);
         return 1;
     }
-    if(as_udp_listen(udp, __udp_client_on_connect) != 0)
+    if(as_udp_listen(udp, __udp_client_on_accepted) != 0)
     {
         LOG_ERR(MSG_UDP_LISTENED);
         return 1;
@@ -134,62 +148,69 @@ int main(int argc, char **argv)
 
 static int __destroy(as_socket_t *sck)
 {
-    asp_buffer_t *buf = (asp_buffer_t *) as_socket_data(sck);
+    __as_data_t *data = (__as_data_t *) as_socket_data(sck);
+    asp_buffer_t *buf = &data->as_buf;
     if(buf->len != 0)
         free(buf->buf);
-    free(buf);
+    free(data);
     return 0;
 }
 
-static int __tcp_client_on_connect(as_tcp_t *srv, as_tcp_t *clnt, void **data, as_socket_destroying_f *cb)
+static int __tcp_client_on_accepted(as_tcp_t *srv, as_tcp_t *clnt, void **data, as_socket_destroying_f *cb)
 {
-    *data = malloc(sizeof(asp_buffer_t));
+    *data = malloc(sizeof(__as_data_t));
     if(*data == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    memset(*data, 0, sizeof(asp_buffer_t));
+    memset(*data, 0, sizeof(__as_data_t));
     *cb = __destroy;
-    return as_tcp_read_start(clnt, __tcp_client_on_read);
+    return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
 }
 
-static int __tcp_client_on_read(as_tcp_t *clnt, __const__ char *buf, __const__ int len)
+static int __tcp_client_on_read(as_tcp_t *clnt, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
 {
-    return asp_decrypt(clnt, (unsigned char *) buf, len, aes_key, (asp_buffer_t *) as_socket_data((as_socket_t *) clnt), __tcp_client_on_read_decrypt);
+    return asp_decrypt(clnt, buf, len, aes_key, (asp_buffer_t *) as_socket_data((as_socket_t *) clnt), __tcp_client_on_read_decrypt);
 }
 
-static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ char *buf, __const__ int len)
+static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_tcp_t *clnt = (as_tcp_t *) parm;
     struct sockaddr_storage addr;
     if(status != 0)
         return 1;
+    __as_data_t *as_data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
     if(type == 0x01)
     {
-        if(parse_asp_address(buf, len, (struct sockaddr*) &addr) != len)
-            return 1;
-        as_tcp_t *remote = as_tcp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
-        as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
-        int conn_sts = as_tcp_connect(remote, (struct sockaddr*) &addr);
-        char *data = malloc(ASP_MAX_DATA_LENGTH(0));
-        int dlen;
-        if(data == NULL)
+        
+        if(as_data->proc == 0)
         {
-            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-            abort();
+            if(parse_asp_address(buf, len, (struct sockaddr*) &addr) != len)
+                return 1;
+            as_tcp_t *remote = as_tcp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
+            as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
+            return as_tcp_connect(remote, (struct sockaddr*) &addr, __tcp_remote_on_connected);
         }
-        asp_encrypt(0x11, conn_sts, NULL, 0, aes_key, (unsigned char *) data, &dlen);
-        int slen = as_tcp_write(clnt, data, dlen);
-        free(data);
-        if(slen <= 0)
+        else
+        {
+            unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(0));
+            int dlen;
+            if(data == NULL)
+            {
+                LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+                abort();
+            }
+            asp_encrypt(0x11, 2, NULL, 0, aes_key, data, &dlen);
+            as_tcp_write(clnt, data, dlen, __tcp_client_on_wrote);
+            free(data);
             return 1;
-        return as_tcp_read_start(remote, __tcp_remote_on_read);
+        }
     }
-    else if(type == 0x02)
+    else if(type == 0x02 && as_data->proc == 1)
     {
         as_tcp_t *remote = (as_tcp_t *) as_socket_map((as_socket_t *) clnt);
-        if(as_tcp_write(remote, buf, len) <= 0)
+        if(as_tcp_write(remote, buf, len, __tcp_remote_on_wrote) <= 0)
             return 1;
         return 0;
     }
@@ -199,46 +220,83 @@ static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const
     }
 }
 
-static int __tcp_remote_on_read(as_tcp_t *remote, __const__ char *buf, __const__ int len)
+static int __tcp_client_on_wrote(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
+{
+    __as_data_t *data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
+    if(data->proc == 0)
+        return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
+    else
+        return as_tcp_read_start((as_tcp_t *) as_socket_map((as_socket_t *) clnt), __tcp_remote_on_read, AS_READ_ONESHOT);
+}
+
+static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
 {
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
-    char *data = malloc(ASP_MAX_DATA_LENGTH(len));
+    __as_data_t *as_data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
+    unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(0));
     int dlen;
     if(data == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    asp_encrypt(0x02, 0, (unsigned char *) buf, len, aes_key, (unsigned char *) data, &dlen);
-    int slen = as_tcp_write(clnt, data, dlen);
+    asp_encrypt(0x11, status, NULL, 0, aes_key, data, &dlen);
+    as_tcp_write(clnt, data, dlen, __tcp_client_on_wrote);
+    free(data);
+    if(status == 0)
+    {
+        as_data->proc = 1;
+        return as_tcp_read_start(remote, __tcp_remote_on_read, AS_READ_ONESHOT);
+    }
+    return 0;
+}
+
+static int __tcp_remote_on_read(as_tcp_t *remote, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
+{
+    as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
+    unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(len));
+    int dlen;
+    if(data == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    asp_encrypt(0x02, 0, buf, len, aes_key, data, &dlen);
+    int slen = as_tcp_write(clnt, data, dlen, __tcp_client_on_wrote);
     free(data);
     if(slen <= 0)
         return 1;
     return 0;
 }
 
-static int __udp_client_on_connect(as_udp_t *srv, as_udp_t *clnt, void **data, as_socket_destroying_f *cb)
+static int __tcp_remote_on_wrote(as_tcp_t *remote, __const__ unsigned char *buf, __const__ size_t len)
 {
-    *data = malloc(sizeof(asp_buffer_t));
+    as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
+    return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
+}
+
+static int __udp_client_on_accepted(as_udp_t *srv, as_udp_t *clnt, void **data, as_socket_destroying_f *cb)
+{
+    *data = malloc(sizeof(__as_data_t));
     if(*data == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    memset(*data, 0, sizeof(asp_buffer_t));
+    memset(*data, 0, sizeof(__as_data_t));
     *cb = __destroy;
-    return as_udp_read_start(clnt, __udp_client_on_read);
+    return as_udp_read_start(clnt, __udp_client_on_read, AS_READ_ONESHOT);
 }
 
-static int __udp_client_on_read(as_udp_t *clnt, __const__ struct msghdr *msg, __const__ char *buf, __const__ int len)
+static int __udp_client_on_read(as_udp_t *clnt, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
 {
-    if(asp_decrypt(clnt, (unsigned char *) buf, len, aes_key, (asp_buffer_t *) as_socket_data((as_socket_t *) clnt), __udp_client_on_read_decrypt) == 4)
+    if(asp_decrypt(clnt, buf, len, aes_key, (asp_buffer_t *) as_socket_data((as_socket_t *) clnt), __udp_client_on_read_decrypt) == 4)
         return 1;
     else
         return 0;
 }
 
-static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ char *buf, __const__ int len)
+static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_udp_t *clnt = (as_udp_t *) parm;
     int addr_len;
@@ -254,9 +312,9 @@ static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const
         as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
         if(as_udp_connect(remote, (struct sockaddr*) &addr) != 0)
             return 1;
-        if(as_udp_read_start(remote, __udp_remote_on_read) != 0)
+        if(as_udp_read_start(remote, __udp_remote_on_read, AS_READ_ONESHOT) != 0)
             return 1;
-        as_udp_write(remote, buf + addr_len, len - addr_len);
+        as_udp_write(remote, buf + addr_len, len - addr_len, NULL);
         return 0;
     }
     else
@@ -265,18 +323,24 @@ static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const
     }
 }
 
-static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, __const__ char *buf, __const__ int len)
+static int __udp_client_on_wrote(as_udp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
+{
+    return as_udp_read_start((as_udp_t *) as_socket_map((as_socket_t *) clnt), __udp_remote_on_read, AS_READ_ONESHOT);
+
+}
+
+static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_udp_t *clnt = (as_udp_t *) as_socket_map((as_socket_t *) remote);
-    char *data = malloc(ASP_MAX_DATA_LENGTH(len));
+    unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(len));
     int dlen;
     if(data == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    asp_encrypt(0x22, 0, (unsigned char *) buf, len, aes_key, (unsigned char *) data, &dlen);
-    as_udp_write(clnt, data, dlen);
+    asp_encrypt(0x22, 0, buf, len, aes_key, data, &dlen);
+    as_udp_write(clnt, data, dlen, __udp_client_on_wrote);
     free(data);
     return 0;
 }

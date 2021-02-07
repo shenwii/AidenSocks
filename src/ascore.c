@@ -122,7 +122,7 @@ static int __set_non_blocking(int fd)
 
 static int __get_socket_error(int fd, char *serrno)
 {
-	int len = 1;
+	socklen_t len = 1;
     return getsockopt(fd, SOL_SOCKET, SO_ERROR, serrno, &len);
 }
 
