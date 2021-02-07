@@ -225,6 +225,8 @@ void __tcp_on_accept(as_tcp_t *tcp)
 
 void __tcp_on_read(as_tcp_t *tcp)
 {
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
     struct sockaddr_storage addr;
     unsigned int addrl = sizeof(struct sockaddr_storage);
     struct msghdr msg;
@@ -252,7 +254,13 @@ void __tcp_on_read(as_tcp_t *tcp)
         if(read > 0)
         {
             if(tcp->sck.read_flags & AS_READ_ONESHOT)
+            {
                 tcp->sck.events &= ~EPOLLIN;
+                ev.data.fd = tcp->sck.fd;
+                ev.data.ptr = tcp;
+                ev.events = tcp->sck.events;
+                epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
+            }
             if(tcp->read_cb != NULL)
             {
                 if(tcp->read_cb(tcp, &msg, buf, read) != 0)
@@ -307,7 +315,6 @@ void __tcp_on_connected(as_tcp_t *tcp)
 
 void __tcp_on_write(as_tcp_t *tcp)
 {
-    LOG_DEBUG("write\n");
     struct epoll_event ev;
     memset(&ev, 0, sizeof(struct epoll_event));
     as_buffer_t *buf = tcp->sck.write_queue.header;
@@ -422,6 +429,8 @@ void __udp_on_accept(as_udp_t *udp)
 
 void __udp_on_read(as_udp_t *udp)
 {
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
     struct sockaddr_storage addr;
     unsigned int addrl = sizeof(struct sockaddr_storage);
     struct msghdr msg;
@@ -449,7 +458,13 @@ void __udp_on_read(as_udp_t *udp)
         if(read > 0)
         {
             if(udp->sck.read_flags & AS_READ_ONESHOT)
+            {
                 udp->sck.events &= ~EPOLLIN;
+                ev.data.fd = udp->sck.fd;
+                ev.data.ptr = udp;
+                ev.events = udp->sck.events;
+                epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
+            }
             if(udp->read_cb != NULL)
             {
                 if(udp->read_cb(udp, &msg, buf, read) != 0)
@@ -1084,7 +1099,6 @@ int as_udp_write(as_udp_t *udp, __const__ unsigned char *buf, __const__ size_t l
     else
     {
         udp->sck.status |= AS_STATUS_INEPOLL;
-        LOG_DEBUG("add event\n");
         epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_ADD, udp->sck.fd, &ev);
     }
     return 0;

@@ -12,6 +12,7 @@
 typedef struct
 {
     asp_buffer_t as_buf;
+    char connect_status;
     char proc;
 } __as_data_t;
 
@@ -181,9 +182,10 @@ static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const
     if(status != 0)
         return 1;
     __as_data_t *as_data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
+    printf("type = %d\n", type);
+    printf("proc = %d\n", as_data->proc);
     if(type == 0x01)
     {
-        
         if(as_data->proc == 0)
         {
             if(parse_asp_address(buf, len, (struct sockaddr*) &addr) != len)
@@ -210,8 +212,7 @@ static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const
     else if(type == 0x02 && as_data->proc == 1)
     {
         as_tcp_t *remote = (as_tcp_t *) as_socket_map((as_socket_t *) clnt);
-        if(as_tcp_write(remote, buf, len, __tcp_remote_on_wrote) <= 0)
-            return 1;
+        as_tcp_write(remote, buf, len, __tcp_remote_on_wrote);
         return 0;
     }
     else
@@ -223,10 +224,22 @@ static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const
 static int __tcp_client_on_wrote(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
 {
     __as_data_t *data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
+    as_tcp_t *remote = (as_tcp_t *) as_socket_map((as_socket_t *) clnt);
+    printf("coned d = %d, connect_status = %d\n", data->proc, data->connect_status);
     if(data->proc == 0)
+    {
+        if(data->connect_status == 0)
+        {
+            data->proc = 1;
+            if(as_tcp_read_start(remote, __tcp_remote_on_read, AS_READ_ONESHOT) != 0)
+                return 1;
+        }
         return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
+    }
     else
-        return as_tcp_read_start((as_tcp_t *) as_socket_map((as_socket_t *) clnt), __tcp_remote_on_read, AS_READ_ONESHOT);
+    {
+        return as_tcp_read_start(remote, __tcp_remote_on_read, AS_READ_ONESHOT);
+    }
 }
 
 static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
@@ -241,13 +254,9 @@ static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
         abort();
     }
     asp_encrypt(0x11, status, NULL, 0, aes_key, data, &dlen);
+    as_data->connect_status = status;
     as_tcp_write(clnt, data, dlen, __tcp_client_on_wrote);
     free(data);
-    if(status == 0)
-    {
-        as_data->proc = 1;
-        return as_tcp_read_start(remote, __tcp_remote_on_read, AS_READ_ONESHOT);
-    }
     return 0;
 }
 
@@ -262,15 +271,14 @@ static int __tcp_remote_on_read(as_tcp_t *remote, __const__ struct msghdr *msg, 
         abort();
     }
     asp_encrypt(0x02, 0, buf, len, aes_key, data, &dlen);
-    int slen = as_tcp_write(clnt, data, dlen, __tcp_client_on_wrote);
+    as_tcp_write(clnt, data, dlen, __tcp_client_on_wrote);
     free(data);
-    if(slen <= 0)
-        return 1;
     return 0;
 }
 
 static int __tcp_remote_on_wrote(as_tcp_t *remote, __const__ unsigned char *buf, __const__ size_t len)
 {
+    printf("remote writed\n");
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
     return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
 }

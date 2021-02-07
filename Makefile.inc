@@ -12,11 +12,11 @@ ASRED_BIN = $(BINDIR)/as-red
 ASSOCKS5_BIN = $(BINDIR)/as-socks5
 ASSERVER_BIN = $(BINDIR)/as-server
 
-CFLAGS += -Os -Wall
+CFLAGS += -Wall
 LDFLAGS += -lssl -lcrypto -liniparser -lpthread
 
 ifdef DEBUG
-CFLAGS += -DDEBUG -g
+CFLAGS += -DDEBUG -g -O0
 else
-LDFLAGS += -s
+LDFLAGS += -s -Os
 endif
