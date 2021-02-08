@@ -27,7 +27,7 @@
  *         0x21: udp send to request
  *         0x22: udp send request
  */
-int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned char *indata, __const__ size_t inlen, __const__ unsigned char *aes_key, unsigned char *outdata, int *outlen)
+int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned char *indata, __const__ size_t inlen, __const__ unsigned char *aes_key, unsigned char *outdata, size_t *outlen)
 {
     static char fst = 0;
     unsigned char *tmp;
@@ -38,9 +38,9 @@ int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned c
     }
     asp_header_t header;
     memset(&header, 0, sizeof(asp_header_t));
-    int headerlen = AES_ENCODE_LEN(sizeof(asp_header_t));
-    int mindatalen = AES_ENCODE_LEN(inlen);
-    int randlen = rand() % ASP_MAX_RANDOM_LENGTH + 1;
+    size_t headerlen = AES_ENCODE_LEN(sizeof(asp_header_t));
+    size_t mindatalen = AES_ENCODE_LEN(inlen);
+    size_t randlen = rand() % ASP_MAX_RANDOM_LENGTH + 1;
     if(inlen != 0)
         header.crc32 = CRC32(indata, inlen);
     header.data_total_len = htonl(mindatalen + randlen);
@@ -60,7 +60,7 @@ int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned c
 int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__ size_t inlen, __const__ unsigned char *aes_key, asp_buffer_t *buf, asp_decrypt_callback_f cb)
 {
     unsigned char *tbuf;
-    int tlen;
+    size_t tlen;
     asp_header_t header;
     uint32_t data_total_len;
     uint32_t data_len;

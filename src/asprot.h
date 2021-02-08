@@ -25,7 +25,7 @@ typedef struct asp_header_s
     char unused;
 } __attribute__((__packed__)) asp_header_t;
 
-int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned char *indata, __const__ size_t inlen, __const__ unsigned char *aes_key, unsigned char *outdata, int *outlen);
+int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned char *indata, __const__ size_t inlen, __const__ unsigned char *aes_key, unsigned char *outdata, size_t *outlen);
 
 int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__ size_t inlen, __const__ unsigned char *aes_key, asp_buffer_t *buf, asp_decrypt_callback_f cb);
 

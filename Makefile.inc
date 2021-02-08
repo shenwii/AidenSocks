@@ -13,7 +13,7 @@ ASSOCKS5_BIN = $(BINDIR)/as-socks5
 ASSERVER_BIN = $(BINDIR)/as-server
 
 CFLAGS += -Wall
-LDFLAGS += -lssl -lcrypto -liniparser -lpthread
+LDFLAGS += -lssl -lcrypto -liniparser
 
 ifdef DEBUG
 CFLAGS += -DDEBUG -g -O0

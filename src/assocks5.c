@@ -279,7 +279,7 @@ static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
     __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
     __s5_conn_header_t *header = (__s5_conn_header_t *) s5_buf->conn_buf;
     unsigned char *data = (unsigned char *) &s5_buf->conn_buf[sizeof(__s5_conn_header_t)];
-    int data_len = s5_buf->conn_buf_size - sizeof(__s5_conn_header_t);
+    size_t data_len = s5_buf->conn_buf_size - sizeof(__s5_conn_header_t);
     if(status != 0)
     {
         resbuf[0] = SOCKS5_VERSION;
@@ -327,7 +327,7 @@ static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
                     return 1;
             }
             unsigned char *sdata = (unsigned char *) malloc(ASP_MAX_DATA_LENGTH(data_len + 1));
-            int sdlen;
+            size_t sdlen;
             if(sdata == NULL)
             {
                 LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
@@ -387,10 +387,8 @@ static int __s5_connect(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ 
 static int __s5_tcp_forward(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_tcp_t *remote = (as_tcp_t *) as_socket_map((as_socket_t *) clnt);
-    if(remote == NULL)
-        return 1;
     unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(len));
-    int dlen;
+    size_t dlen;
     if(data == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
@@ -410,7 +408,7 @@ static int __s5_udp_forward(as_tcp_t *clnt, __const__ unsigned char *buf, __cons
         return 1;
     header = (__s5_udp_forward_t *) buf;
     unsigned char *data = (unsigned char *) &buf[headerlen];
-    int data_len = len - headerlen;
+    size_t data_len = len - headerlen;
     as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
     if(as_udp_connect(remote, (struct sockaddr *) &server_addr) != 0)
         return 1;
@@ -442,7 +440,7 @@ static int __s5_udp_forward(as_tcp_t *clnt, __const__ unsigned char *buf, __cons
             return 1;
     }
     unsigned char *sdata = malloc(ASP_MAX_DATA_LENGTH(data_len + 1));
-    int sdlen;
+    size_t sdlen;
     if(sdata == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
@@ -469,8 +467,6 @@ static int __tcp_remote_on_read_decrypt(void *parm, __const__ char type, __const
     memset(resbuf, 0, 10);
     as_tcp_t *remote = (as_tcp_t *) parm;
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
-    if(clnt == NULL)
-        return 1;
     __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
     if(status != 0)
     {

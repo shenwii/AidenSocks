@@ -198,7 +198,7 @@ static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const
         else
         {
             unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(0));
-            int dlen;
+            size_t dlen;
             if(data == NULL)
             {
                 LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
@@ -248,7 +248,7 @@ static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
     __as_data_t *as_data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
     unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(0));
-    int dlen;
+    size_t dlen;
     if(data == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
@@ -265,7 +265,7 @@ static int __tcp_remote_on_read(as_tcp_t *remote, __const__ struct msghdr *msg, 
 {
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
     unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(len));
-    int dlen;
+    size_t dlen;
     if(data == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
@@ -335,14 +335,13 @@ static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const
 static int __udp_client_on_wrote(as_udp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
 {
     return as_udp_read_start((as_udp_t *) as_socket_map((as_socket_t *) clnt), __udp_remote_on_read, AS_READ_ONESHOT);
-
 }
 
 static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_udp_t *clnt = (as_udp_t *) as_socket_map((as_socket_t *) remote);
     unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(len));
-    int dlen;
+    size_t dlen;
     if(data == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
