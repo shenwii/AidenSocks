@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 
@@ -19,44 +20,54 @@ typedef struct
     char cmd;
     char rsv;
     char atyp;
-} __attribute__ ((__packed__)) s5_conn_header_t;
+} __attribute__ ((__packed__)) __s5_conn_header_t;
 
 typedef struct
 {
     char rsv[2];
     char frag;
     char atyp;
-} __attribute__ ((__packed__)) s5_udp_forward_t;
+} __attribute__ ((__packed__)) __s5_udp_forward_t;
 
 typedef struct
 {
     asp_buffer_t asp_buffer;
     char s5_status;
+    unsigned char *conn_buf;
+    size_t conn_buf_size;
 } __s5_buffer_t;
 
 struct sockaddr_storage server_addr;
 
 static int __destroy(as_socket_t *sck);
 
-static int __tcp_client_on_connect(as_tcp_t *srv, as_tcp_t *clnt, void **data, as_socket_destroying_f *cb);
+static int __tcp_client_on_accepted(as_tcp_t *srv, as_tcp_t *clnt, void **data, as_socket_destroying_f *cb);
 
-static int __tcp_client_on_read(as_tcp_t *clnt, __const__ char *buf, __const__ int len);
+static int __tcp_client_on_read(as_tcp_t *clnt, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __s5_auth(as_tcp_t *srv, __const__ char *buf, __const__ int len);
+static int __tcp_client_on_wrote(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __s5_connect(as_tcp_t *srv, __const__ char *buf, __const__ int len);
+static int __s5_auth(as_tcp_t *srv, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __s5_tcp_forward(as_tcp_t *srv, __const__ char *buf, __const__ int len);
+static int __s5_connect(as_tcp_t *srv, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __s5_udp_forward(as_tcp_t *srv, __const__ char *buf, __const__ int len);
+static int __s5_tcp_forward(as_tcp_t *srv, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __tcp_remote_on_read(as_tcp_t *remote, __const__ char *buf, __const__ int len);
+static int __s5_udp_forward(as_tcp_t *srv, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __tcp_remote_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ char *buf, __const__ int len);
+static int __tcp_remote_on_connected(as_tcp_t *remote, char status);
 
-static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, __const__ char *buf, __const__ int len);
+static int __tcp_remote_on_read(as_tcp_t *remote, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len);
 
-static int __udp_remote_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ char *buf, __const__ int len);
+static int __tcp_remote_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len);
+
+static int __tcp_remote_on_wrote(as_tcp_t *remote, __const__ unsigned char *buf, __const__ size_t len);
+
+static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len);
+
+static int __udp_remote_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len);
+
+static int __udp_remote_on_wrote(as_udp_t *remote, __const__ unsigned char *buf, __const__ size_t len);
 
 static int __usage(char *prog)
 {
@@ -139,7 +150,7 @@ int main(int argc, char **argv)
         LOG_ERR(MSG_TCP_BIND, conf.baddr6, conf.bport);
         return 1;
     }
-    if(as_tcp_listen(tcp, __tcp_client_on_connect) != 0)
+    if(as_tcp_listen(tcp, __tcp_client_on_accepted) != 0)
     {
         LOG_ERR(MSG_TCP_LISTENED);
         return 1;
@@ -153,7 +164,7 @@ int main(int argc, char **argv)
         LOG_ERR(MSG_TCP_BIND, conf.baddr, conf.bport);
         return 1;
     }
-    if(as_tcp_listen(tcp, __tcp_client_on_connect) != 0)
+    if(as_tcp_listen(tcp, __tcp_client_on_accepted) != 0)
     {
         LOG_ERR(MSG_TCP_LISTENED);
         return 1;
@@ -172,7 +183,7 @@ static int __destroy(as_socket_t *sck)
     return 0;
 }
 
-static int __tcp_client_on_connect(as_tcp_t *srv, as_tcp_t *clnt, void **data, as_socket_destroying_f *cb)
+static int __tcp_client_on_accepted(as_tcp_t *srv, as_tcp_t *clnt, void **data, as_socket_destroying_f *cb)
 {
     *data = malloc(sizeof(__s5_buffer_t));
     if(*data == NULL)
@@ -182,10 +193,10 @@ static int __tcp_client_on_connect(as_tcp_t *srv, as_tcp_t *clnt, void **data, a
     }
     memset(*data, 0, sizeof(__s5_buffer_t));
     *cb = __destroy;
-    return as_tcp_read_start(clnt, __tcp_client_on_read);
+    return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
 }
 
-static int __tcp_client_on_read(as_tcp_t *clnt, __const__ char *buf, __const__ int len)
+static int __tcp_client_on_read(as_tcp_t *clnt, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
 {
     __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
     switch(s5_buf->s5_status)
@@ -204,12 +215,33 @@ static int __tcp_client_on_read(as_tcp_t *clnt, __const__ char *buf, __const__ i
     return 0;
 }
 
-static int __s5_auth(as_tcp_t *clnt, __const__ char *buf, __const__ int len)
+static int __tcp_client_on_wrote(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
+{
+    __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
+    if(s5_buf->s5_status == 0x02)
+    {
+        as_tcp_t *remote = (as_tcp_t *) as_socket_map((as_socket_t *) clnt);
+        return as_tcp_read_start(remote, __tcp_remote_on_read, AS_READ_ONESHOT);
+    }
+    else if(s5_buf->s5_status == 0x03)
+    {
+        as_udp_t *udp = (as_udp_t *) as_socket_map((as_socket_t *) clnt);
+        if(udp != NULL)
+            return as_udp_read_start(udp, __udp_remote_on_read, AS_READ_ONESHOT);
+    }
+    else
+    {
+        return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
+    }
+    return 0; 
+}
+
+static int __s5_auth(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
 {
     char dlen;
     char method;
     char ver;
-    char resbuf[2];
+    unsigned char resbuf[2];
     __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
     if(len <= 2)
         return 1;
@@ -219,7 +251,7 @@ static int __s5_auth(as_tcp_t *clnt, __const__ char *buf, __const__ int len)
     dlen = buf[1];
     if(dlen != len - 2)
         return 1;
-    char *tbuf = (char *) &buf[2];
+    unsigned char *tbuf = (unsigned char *) &buf[2];
     while(dlen--)
     {
         method = *tbuf++;
@@ -228,43 +260,34 @@ static int __s5_auth(as_tcp_t *clnt, __const__ char *buf, __const__ int len)
             resbuf[0] = SOCKS5_VERSION;
             resbuf[1] = 0x00;
             s5_buf->s5_status = 0x01;
-            if(as_tcp_write(clnt, resbuf, 2) <= 0)
-                return 1;
+            as_tcp_write(clnt, resbuf, 2, __tcp_client_on_wrote);
             return 0;
         }
     }
     resbuf[0] = SOCKS5_VERSION;
     resbuf[1] = 0xff;
     s5_buf->s5_status = 0xff;
-    if(as_tcp_write(clnt, resbuf, 2) <= 0)
-        return 1;
+    as_tcp_write(clnt, resbuf, 2, __tcp_client_on_wrote);
     return 0;
 }
 
-static int __s5_connect(as_tcp_t *clnt, __const__ char *buf, __const__ int len)
+static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
 {
-    s5_conn_header_t *header;
-    __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
-    int headerlen = sizeof(s5_conn_header_t);
-    char resbuf[10];
+    unsigned char resbuf[10];
     memset(resbuf, 0, 10);
-    if(len <= headerlen)
-        return 1;
-    header = (s5_conn_header_t *) buf;
-    if(header->ver != SOCKS5_VERSION)
-        return 1;
-    char *data = (char *) &buf[headerlen];
-    int data_len = len - headerlen;
-    as_tcp_t *remote = as_tcp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
-    as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
-    int conn_sts = as_tcp_connect(remote, (struct sockaddr*) &server_addr);
-    if(conn_sts != 0)
+    as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
+    __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
+    __s5_conn_header_t *header = (__s5_conn_header_t *) s5_buf->conn_buf;
+    unsigned char *data = (unsigned char *) &s5_buf->conn_buf[sizeof(__s5_conn_header_t)];
+    int data_len = s5_buf->conn_buf_size - sizeof(__s5_conn_header_t);
+    if(status != 0)
     {
         resbuf[0] = SOCKS5_VERSION;
         resbuf[1] = 0x05;
         resbuf[3] = 0x01;
-        if(as_tcp_write(clnt, resbuf, 10) <= 0)
-            return 1;
+        as_tcp_write(clnt, resbuf, 10, __tcp_client_on_wrote);
+        free(s5_buf->conn_buf);
+        return 0;
     }
     switch(header->cmd)
     {
@@ -273,43 +296,47 @@ static int __s5_connect(as_tcp_t *clnt, __const__ char *buf, __const__ int len)
             switch(header->atyp)
             {
                 case 1:
-                {
                     if(data_len != 6)
+                    {
+                        free(s5_buf->conn_buf);
                         return 1;
-                }
+                    }
                     break;
                 case 3:
-                {
                     if(data_len < 3)
+                    {
+                        free(s5_buf->conn_buf);
                         return 1;
+                    }
                     unsigned char hl = data[0];
                     if(data_len != hl + 3)
+                    {
+                        free(s5_buf->conn_buf);
                         return 1;
-                }
+                    }
                     break;
                 case 4:
-                {
                     if(data_len != 18)
+                    {
+                        free(s5_buf->conn_buf);
                         return 1;
-                }
+                    }
                     break;
                 default:
+                    free(s5_buf->conn_buf);
                     return 1;
             }
-            char *sdata = malloc(ASP_MAX_DATA_LENGTH(data_len + 1));
+            unsigned char *sdata = (unsigned char *) malloc(ASP_MAX_DATA_LENGTH(data_len + 1));
             int sdlen;
             if(sdata == NULL)
             {
                 LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
                 abort();
             }
-            asp_encrypt(0x01, 0, (unsigned char *) data - 1, data_len + 1, aes_key, (unsigned char *) sdata, &sdlen);
-            int slen = as_tcp_write(remote, sdata, sdlen);
+            asp_encrypt(0x01, 0, data - 1, data_len + 1, aes_key, (unsigned char *) sdata, &sdlen);
+            as_tcp_write(remote, sdata, sdlen, __tcp_remote_on_wrote);
             free(sdata);
-            if(slen <= 0)
-                return 1;
-            if(as_tcp_read_start(remote, __tcp_remote_on_read) != 0)
-                return 1;
+            as_tcp_read_start(remote, __tcp_remote_on_read, AS_READ_ONESHOT);
         }
             break;
         case 0x02:
@@ -317,53 +344,72 @@ static int __s5_connect(as_tcp_t *clnt, __const__ char *buf, __const__ int len)
             resbuf[0] = SOCKS5_VERSION;
             resbuf[1] = 0x07;
             resbuf[3] = 0x01;
-            if(as_tcp_write(clnt, resbuf, 10) <= 0)
-                return 1;
+            as_tcp_write(clnt, resbuf, 10, __tcp_client_on_wrote);
         case 0x03:
             resbuf[0] = SOCKS5_VERSION;
             resbuf[1] = 0x00;
             resbuf[3] = 0x01;
             s5_buf->s5_status = 0x03;
-            if(as_tcp_write(clnt, resbuf, 10) <= 0)
-                return 1;
+            as_tcp_write(clnt, resbuf, 10, __tcp_client_on_wrote);
         default:
             resbuf[0] = SOCKS5_VERSION;
             resbuf[1] = 0x07;
             resbuf[3] = 0x01;
-            if(as_tcp_write(clnt, resbuf, 10) <= 0)
-                return 1;
+            as_tcp_write(clnt, resbuf, 10, __tcp_client_on_wrote);
     }
+    free(s5_buf->conn_buf);
     return 0;
 }
 
-static int __s5_tcp_forward(as_tcp_t *clnt, __const__ char *buf, __const__ int len)
+static int __s5_connect(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
+{
+    __s5_conn_header_t *header;
+    __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
+    int headerlen = sizeof(__s5_conn_header_t);
+    if(len <= headerlen)
+        return 1;
+    header = (__s5_conn_header_t *) buf;
+    if(header->ver != SOCKS5_VERSION)
+        return 1;
+    as_tcp_t *remote = as_tcp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
+    as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
+    s5_buf->conn_buf = (unsigned char *) malloc(len);
+    if(s5_buf->conn_buf == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    memcpy(s5_buf->conn_buf, buf, len);
+    s5_buf->conn_buf_size = len;
+    return as_tcp_connect(remote, (struct sockaddr*) &server_addr, __tcp_remote_on_connected);
+}
+
+static int __s5_tcp_forward(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_tcp_t *remote = (as_tcp_t *) as_socket_map((as_socket_t *) clnt);
     if(remote == NULL)
         return 1;
-    char *data = malloc(ASP_MAX_DATA_LENGTH(len));
+    unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(len));
     int dlen;
     if(data == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    asp_encrypt(0x02, 0, (unsigned char *) buf, len, aes_key, (unsigned char *) data, &dlen);
-    int slen = as_tcp_write(remote, data, dlen);
+    asp_encrypt(0x02, 0, buf, len, aes_key, data, &dlen);
+    as_tcp_write(remote, data, dlen, __tcp_client_on_wrote);
     free(data);
-    if(slen <= 0)
-        return 1;
     return 0;
 }
 
-static int __s5_udp_forward(as_tcp_t *clnt, __const__ char *buf, __const__ int len)
+static int __s5_udp_forward(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
 {
-    s5_udp_forward_t *header;
-    int headerlen = sizeof(s5_udp_forward_t);
+    __s5_udp_forward_t *header;
+    int headerlen = sizeof(__s5_udp_forward_t);
     if(len <= headerlen)
         return 1;
-    header = (s5_udp_forward_t *) buf;
-    char *data = (char *) &buf[headerlen];
+    header = (__s5_udp_forward_t *) buf;
+    unsigned char *data = (unsigned char *) &buf[headerlen];
     int data_len = len - headerlen;
     as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
     if(as_udp_connect(remote, (struct sockaddr *) &server_addr) != 0)
@@ -395,33 +441,31 @@ static int __s5_udp_forward(as_tcp_t *clnt, __const__ char *buf, __const__ int l
         default:
             return 1;
     }
-    char *sdata = malloc(ASP_MAX_DATA_LENGTH(data_len + 1));
+    unsigned char *sdata = malloc(ASP_MAX_DATA_LENGTH(data_len + 1));
     int sdlen;
     if(sdata == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    asp_encrypt(0x21, 0, (unsigned char *) data - 1, data_len + 1, aes_key, (unsigned char *) sdata, &sdlen);
-    as_udp_write(remote, sdata, sdlen);
+    asp_encrypt(0x21, 0, data - 1, data_len + 1, aes_key, sdata, &sdlen);
+    as_udp_write(remote, sdata, sdlen, __udp_remote_on_wrote);
     free(sdata);
-    if(as_udp_read_start(remote, __udp_remote_on_read) != 0)
+    if(as_udp_read_start(remote, __udp_remote_on_read, AS_READ_ONESHOT) != 0)
         return 1;
     return 0;
 }
 
-static int __tcp_remote_on_read(as_tcp_t *remote, __const__ char *buf, __const__ int len)
+static int __tcp_remote_on_read(as_tcp_t *remote, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
-    if(clnt == NULL)
-        return 1;
     __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
     return asp_decrypt(remote, (unsigned char *) buf, len, aes_key, (asp_buffer_t *) s5_buf, __tcp_remote_on_read_decrypt);
 }
 
-static int __tcp_remote_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ char *buf, __const__ int len)
+static int __tcp_remote_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len)
 {
-    char resbuf[10];
+    unsigned char resbuf[10];
     memset(resbuf, 0, 10);
     as_tcp_t *remote = (as_tcp_t *) parm;
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
@@ -433,62 +477,68 @@ static int __tcp_remote_on_read_decrypt(void *parm, __const__ char type, __const
         resbuf[0] = SOCKS5_VERSION;
         resbuf[1] = 0x05;
         resbuf[3] = 0x01;
-        as_tcp_write(clnt, resbuf, 10);
+        as_tcp_write(clnt, resbuf, 10, __tcp_client_on_wrote);
         return 0;
     }
     if(type == 0x11)
     {
+        s5_buf->s5_status = 0x02;
         resbuf[0] = SOCKS5_VERSION;
         resbuf[1] = 0x00;
         resbuf[3] = 0x01;
-        if(as_tcp_write(clnt, resbuf, 10) <= 0)
-            return 1;
-        s5_buf->s5_status = 0x02;
-        return 0;
+        as_tcp_write(clnt, resbuf, 10, __tcp_client_on_wrote);
     }
     else if(type == 0x02)
     {
-        if(as_tcp_write(clnt, buf, len) <= 0)
-            return 1;
-        return 0;
+        as_tcp_write(clnt, buf, len, __tcp_client_on_wrote);
     }
     else
     {
         return 1;
     }
+    return 0;
 }
 
-static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, __const__ char *buf, __const__ int len)
+static int __tcp_remote_on_wrote(as_tcp_t *remote, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
-    if(clnt == NULL)
-        return 1;
     __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
-    return asp_decrypt(remote, (unsigned char *) buf, len, aes_key, (asp_buffer_t *) s5_buf, __udp_remote_on_read_decrypt);
+    if(s5_buf->s5_status == 0x02)
+        return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
+    return 0;
 }
 
-static int __udp_remote_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ char *buf, __const__ int len)
+static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
+{
+    as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
+    __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
+    return asp_decrypt(remote, buf, len, aes_key, (asp_buffer_t *) s5_buf, __udp_remote_on_read_decrypt);
+}
+
+static int __udp_remote_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_tcp_t *remote = (as_tcp_t *) parm;
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
-    if(clnt == NULL)
-        return 1;
     if(status != 0)
         return 1;
     if(type == 0x22)
     {
-        char *data = (char *) malloc(len + 10);
+        unsigned char *data = (unsigned char *) malloc(len + 10);
         memset(data, 0, 10);
         data[3] = 0x01;
         memcpy(&data[10], buf, len);
-        int slen = as_tcp_write(clnt, data, len + 10);
+        as_tcp_write(clnt, data, len + 10, __tcp_client_on_wrote);
         free(data);
-        if(slen <= 0)
-            return 1;
         return 0;
     }
     else
     {
         return 1;
     }
+}
+
+static int __udp_remote_on_wrote(as_udp_t *remote, __const__ unsigned char *buf, __const__ size_t len)
+{
+    as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
+    return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
 }
