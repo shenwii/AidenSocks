@@ -397,7 +397,7 @@ static int __s5_tcp_forward(as_tcp_t *clnt, __const__ unsigned char *buf, __cons
         abort();
     }
     asp_encrypt(0x02, 0, buf, len, aes_key, data, &dlen);
-    as_tcp_write(remote, data, dlen, __tcp_client_on_wrote);
+    as_tcp_write(remote, data, dlen, __tcp_remote_on_wrote);
     free(data);
     return 0;
 }
@@ -502,10 +502,7 @@ static int __tcp_remote_on_read_decrypt(void *parm, __const__ char type, __const
 static int __tcp_remote_on_wrote(as_tcp_t *remote, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
-    __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
-    if(s5_buf->s5_status == 0x02)
-        return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
-    return 0;
+    return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
 }
 
 static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)

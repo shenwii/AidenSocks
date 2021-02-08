@@ -19,7 +19,6 @@ AidenSocks is a lightweight secured proxy, it's written by pure c.
 
 ## Dependencies
 * linux(epoll)
-* pthread
 * libiniparser
 * openssl
 
