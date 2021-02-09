@@ -334,7 +334,7 @@ static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
                 abort();
             }
             asp_encrypt(0x01, 0, data - 1, data_len + 1, aes_key, (unsigned char *) sdata, &sdlen);
-            as_tcp_write(remote, sdata, sdlen, __tcp_remote_on_wrote);
+            as_tcp_write(remote, sdata, sdlen, NULL);
             free(sdata);
             as_tcp_read_start(remote, __tcp_remote_on_read, AS_READ_ONESHOT);
         }
@@ -458,7 +458,10 @@ static int __tcp_remote_on_read(as_tcp_t *remote, __const__ struct msghdr *msg, 
 {
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
     __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
-    return asp_decrypt(remote, (unsigned char *) buf, len, aes_key, (asp_buffer_t *) s5_buf, __tcp_remote_on_read_decrypt);
+    int rtn = asp_decrypt(remote, (unsigned char *) buf, len, aes_key, (asp_buffer_t *) s5_buf, __tcp_remote_on_read_decrypt);
+    if(rtn == -1)
+        return as_tcp_read_start(remote, __tcp_remote_on_read, AS_READ_ONESHOT);
+    return rtn;
 }
 
 static int __tcp_remote_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len)
@@ -483,6 +486,7 @@ static int __tcp_remote_on_read_decrypt(void *parm, __const__ char type, __const
         resbuf[1] = 0x00;
         resbuf[3] = 0x01;
         as_tcp_write(clnt, resbuf, 10, __tcp_client_on_wrote);
+        as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
     }
     else if(type == 0x02)
     {
@@ -505,7 +509,10 @@ static int __udp_remote_on_read(as_udp_t *remote, __const__ struct msghdr *msg, 
 {
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
     __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data((as_socket_t *) clnt);
-    return asp_decrypt(remote, buf, len, aes_key, (asp_buffer_t *) s5_buf, __udp_remote_on_read_decrypt);
+    int rtn = asp_decrypt(remote, buf, len, aes_key, (asp_buffer_t *) s5_buf, __udp_remote_on_read_decrypt);
+    if(rtn == -1)
+        return as_udp_read_start(remote, __udp_remote_on_read, AS_READ_ONESHOT);
+    return rtn;
 }
 
 static int __udp_remote_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len)

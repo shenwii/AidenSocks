@@ -173,7 +173,10 @@ static int __tcp_client_on_accepted(as_tcp_t *srv, as_tcp_t *clnt, void **data, 
 
 static int __tcp_client_on_read(as_tcp_t *clnt, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
 {
-    return asp_decrypt(clnt, buf, len, aes_key, (asp_buffer_t *) as_socket_data((as_socket_t *) clnt), __tcp_client_on_read_decrypt);
+    int rtn = asp_decrypt(clnt, buf, len, aes_key, (asp_buffer_t *) as_socket_data((as_socket_t *) clnt), __tcp_client_on_read_decrypt);
+    if(rtn == -1)
+        return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
+    return rtn;
 }
 
 static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len)
@@ -183,8 +186,6 @@ static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const
     if(status != 0)
         return 1;
     __as_data_t *as_data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
-    printf("type = %d\n", type);
-    printf("proc = %d\n", as_data->proc);
     if(type == 0x01)
     {
         if(as_data->proc == 0)
@@ -226,7 +227,6 @@ static int __tcp_client_on_wrote(as_tcp_t *clnt, __const__ unsigned char *buf, _
 {
     __as_data_t *data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
     as_tcp_t *remote = (as_tcp_t *) as_socket_map((as_socket_t *) clnt);
-    printf("coned d = %d, connect_status = %d\n", data->proc, data->connect_status);
     if(data->proc == 0)
     {
         if(data->connect_status == 0)
@@ -279,7 +279,6 @@ static int __tcp_remote_on_read(as_tcp_t *remote, __const__ struct msghdr *msg, 
 
 static int __tcp_remote_on_wrote(as_tcp_t *remote, __const__ unsigned char *buf, __const__ size_t len)
 {
-    printf("remote writed\n");
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
     return as_tcp_read_start(clnt, __tcp_client_on_read, AS_READ_ONESHOT);
 }
@@ -299,10 +298,10 @@ static int __udp_client_on_accepted(as_udp_t *srv, as_udp_t *clnt, void **data, 
 
 static int __udp_client_on_read(as_udp_t *clnt, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
 {
-    if(asp_decrypt(clnt, buf, len, aes_key, (asp_buffer_t *) as_socket_data((as_socket_t *) clnt), __udp_client_on_read_decrypt) == 4)
-        return 1;
-    else
-        return 0;
+    int rtn = asp_decrypt(clnt, buf, len, aes_key, (asp_buffer_t *) as_socket_data((as_socket_t *) clnt), __udp_client_on_read_decrypt);
+    if(rtn == -1)
+        return as_udp_read_start(clnt, __udp_client_on_read, AS_READ_ONESHOT);
+    return rtn;
 }
 
 static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len)

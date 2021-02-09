@@ -59,6 +59,7 @@ int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned c
 
 int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__ size_t inlen, __const__ unsigned char *aes_key, asp_buffer_t *buf, asp_decrypt_callback_f cb)
 {
+    char is_call = 0;
     unsigned char *tbuf;
     size_t tlen;
     asp_header_t header;
@@ -128,6 +129,7 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
             break;
         }
         rtn = cb((void *) parm, header.type, header.status, ucdata, data_len);
+        is_call = 1;
         free(ucdata);
         if(rtn != 0)
         {
@@ -152,5 +154,7 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
         buf->len = tlen;
         free(wf_buf);
     }
+    if(is_call == 0)
+        return -1;
     return rtn;
 }
