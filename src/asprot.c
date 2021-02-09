@@ -154,7 +154,7 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
         buf->len = tlen;
         free(wf_buf);
     }
-    if(is_call == 0)
+    if(rtn = 0 && is_call == 0)
         return -1;
     return rtn;
 }
