@@ -208,11 +208,7 @@ void __tcp_on_accept(as_tcp_t *tcp)
     if(fd <= 0)
         return;
     LOG_DEBUG("fd = %d is inited\n", fd);
-    if(__set_non_blocking(tcp->sck.fd) != 0)
-    {
-        LOG_DEBUG("set non block failed\n");
-        return;
-    }
+    __set_non_blocking(tcp->sck.fd);
     if(tcp->accept_cb == NULL)
         return;
     as_tcp_t *client = as_tcp_init(tcp->sck.loop, NULL, NULL);
@@ -784,11 +780,7 @@ int as_tcp_connect(as_tcp_t *tcp, struct sockaddr *addr, as_tcp_connected_f cb)
         return 1;
     LOG_DEBUG("fd = %d is inited\n", tcp->sck.fd);
     __set_timeout(tcp->sck.fd);
-    if(__set_non_blocking(tcp->sck.fd) != 0)
-    {
-        LOG_DEBUG("set non block failed\n");
-        return 1;
-    }
+    __set_non_blocking(tcp->sck.fd);
     if(addr->sa_family == AF_INET6)
     {
         int rtn = connect(tcp->sck.fd, addr, sizeof(struct sockaddr_in6));
@@ -914,11 +906,7 @@ int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
     LOG_DEBUG("fd = %d is inited\n", udp->sck.fd);
     __set_timeout(udp->sck.fd);
     __set_reuseaddr(udp->sck.fd);
-    if(__set_non_blocking(udp->sck.fd) != 0)
-    {
-        LOG_DEBUG("set non block failed\n");
-        return 1;
-    }
+    __set_non_blocking(udp->sck.fd);
     if(addr->sa_family == AF_INET6)
     {
         if(flags & AS_UDP_IPV6ONLY)
@@ -985,11 +973,7 @@ int as_udp_connect(as_udp_t *udp, struct sockaddr *addr)
         return 1;
     LOG_DEBUG("fd = %d is inited\n", udp->sck.fd);
     __set_timeout(udp->sck.fd);
-    if(__set_non_blocking(udp->sck.fd) != 0)
-    {
-        LOG_DEBUG("set non block failed\n");
-        return 1;
-    }
+    __set_non_blocking(udp->sck.fd);
     if(addr->sa_family == AF_INET6)
     {
         memcpy(&udp->sck.addr, addr, sizeof(struct sockaddr_in6));
@@ -1173,12 +1157,15 @@ int as_loop_run(as_loop_t *loop)
                 {
                     as_tcp_t *tcp = (as_tcp_t *) sck;
                     if(tcp->conned_cb != NULL)
-                        tcp->conned_cb(tcp, 1);
+                    {
+                        if(tcp->conned_cb(tcp, 1) != 0)
+                            as_close(sck);
+                    }
+                    sck->events &= ~EPOLLOUT;
                 }
                 else
                 {
-                    LOG_DEBUG("a\n");
-                    as_close((as_socket_t *) events[i].data.ptr);
+                    as_close(sck);
                 }
                 continue;
             }            
