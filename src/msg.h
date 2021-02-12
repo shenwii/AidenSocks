@@ -14,5 +14,6 @@
 #define MSG_UDP_LISTENED "udp can't listened\n"
 #define MSG_UDP_LISTEN_ON "udp server listen on %s:%d\n"
 #define MSG_CONNECT_SERVER "can't connect to server: %s\n"
+#define MSG_BUG "this is a bug, please report it, errno = %d\n"
 
 #endif
