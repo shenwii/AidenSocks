@@ -497,7 +497,7 @@ void __udp_fake_on_write(as_udp_t *udp)
         if(buf->len == buf->wrote_len)
         {
             buf->udp->udp_timeout = time(NULL);
-            if(buf->wrote_cb != NULL)
+            if(buf->wrote_cb != NULL && buf->udp != NULL)
             {
                 if(((as_udp_wrote_f) buf->wrote_cb)(buf->udp, buf->data, buf->len) != 0)
                 {
@@ -652,7 +652,22 @@ void __socket_handle_epollout(as_socket_t *sck)
         else
             __udp_on_write((as_udp_t *) sck);
     }
-    
+}
+
+void __as_close(as_socket_t *sck)
+{
+    if(sck->status & AS_STATUS_INEPOLL)
+        epoll_ctl(sck->loop->epfd, EPOLL_CTL_DEL, sck->fd, NULL);
+    sck->status |= AS_STATUS_CLOSED;
+    if(sck->type == SOCKET_TYPE_UDP_FAKE)
+    {
+        as_udp_t *udp = (as_udp_t *) sck;
+        for(as_buffer_t *asbuf = udp->udp_server->sck.write_queue.header; asbuf != NULL; asbuf = asbuf->next)
+        {
+            if(asbuf->udp == udp)
+                asbuf->udp = NULL;
+        } 
+    }
 }
 
 as_loop_t *as_loop_init()
@@ -1090,15 +1105,10 @@ void as_socket_map_bind(as_socket_t *sck1, as_socket_t *sck2)
 
 int as_close(as_socket_t *sck)
 {
-    if(sck->status & AS_STATUS_INEPOLL)
-        epoll_ctl(sck->loop->epfd, EPOLL_CTL_DEL, sck->fd, NULL);
-    sck->status |= AS_STATUS_CLOSED;
+    __as_close(sck);
     if(sck->map != NULL)
     {
-        as_socket_t *sckmap = sck->map;
-        if(sckmap->status & AS_STATUS_INEPOLL)
-            epoll_ctl(sckmap->loop->epfd, EPOLL_CTL_DEL, sckmap->fd, NULL);
-        sckmap->status |= AS_STATUS_CLOSED;
+        __as_close(sck->map);
     }
     return 0;
 }
