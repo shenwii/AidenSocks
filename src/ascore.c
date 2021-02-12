@@ -1,20 +1,14 @@
 #include "ascore.h"
 #include "log.h"
 
-#include <unistd.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
-#include <sys/wait.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <arpa/inet.h>
-#include <pthread.h>
 #include <time.h>
-#include <stdio.h>
-#include <signal.h>
 #include <fcntl.h>
 #include <errno.h>
 
@@ -815,7 +809,7 @@ int as_tcp_read_start(as_tcp_t *tcp, as_tcp_read_f cb, int flags)
     ev.data.fd = tcp->sck.fd;
     ev.data.ptr = tcp;
     tcp->sck.events |= EPOLLIN;
-    tcp->sck.read_flags = AS_READ_ONESHOT;
+    tcp->sck.read_flags = flags;
     ev.events = tcp->sck.events;
     if(tcp->sck.status & AS_STATUS_INEPOLL)
     {
