@@ -1,8 +1,8 @@
-#include <string.h>
-#include <stdlib.h>
-
 #include "iconf.h"
 #include "log.h"
+
+#include <string.h>
+#include <stdlib.h>
 
 static char *__ckey(__const__ char *secname, __const__ char *prop)
 {

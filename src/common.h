@@ -1,9 +1,14 @@
 #ifndef _COMMON_H
 #define _COMMON_H
 
-#include <sys/types.h>
+#if defined _WIN32 || defined __CYGWIN__
+#include <winsock2.h>
+#include <Ws2tcpip.h>
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
+#endif
+#include <sys/types.h>
 
 int getfirsthostbyname(__const__ char *hostname, struct sockaddr* addr);
 

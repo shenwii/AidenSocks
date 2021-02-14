@@ -1,6 +1,7 @@
+#include "aes.h"
+
 #include <string.h>
 
-#include "aes.h"
 
 int aes_encrypt(__const__ unsigned char *indata, __const__ int len, unsigned char *outdata, __const__ unsigned char *key)
 {

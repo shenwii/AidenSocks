@@ -2,9 +2,14 @@
 #include "aes.h"
 #include "crc32.h"
 #include "log.h"
+
 #include <stdlib.h>
 #include <string.h>
+#if defined _WIN32 || defined __CYGWIN__
+#include <Ws2tcpip.h>
+#else
 #include <arpa/inet.h>
+#endif
 
 /*
  *  +--------------------------------------------------------------+------------------+

@@ -3,7 +3,9 @@ include Makefile.inc
 all:
 	@make -f Makefile_asdns.mk
 	@make -f Makefile_asgenkey.mk
+ifneq ($(OS),Windows_NT)
 	@make -f Makefile_asred.mk
+endif
 	@make -f Makefile_assocks5.mk
 	@make -f Makefile_asserver.mk
 

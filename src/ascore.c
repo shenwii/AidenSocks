@@ -3,16 +3,23 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#if defined _WIN32 || defined __CYGWIN__
+#include <winsock2.h>
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
-#ifdef __linux__
+#include <arpa/inet.h>
+#endif
+#if defined __linux__
 #include <sys/epoll.h>
+#elif defined _WIN32 || defined __CYGWIN__
+#include <Ws2tcpip.h>
 #else
 #include <sys/select.h>
 #endif
-#include <arpa/inet.h>
 #include <time.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -35,6 +42,11 @@
 #else
 #define AS_EVENTS_READ 0x01
 #define AS_EVENTS_WRITE 0x02
+#endif
+
+#if defined _WIN32 || defined __CYGWIN__
+typedef int socklen_t;
+#define MSG_NOSIGNAL 0
 #endif
 
 struct as_loop_s
@@ -117,17 +129,26 @@ static int __set_timeout(int fd)
 
 static int __set_reuseaddr(int fd)
 {
+#if defined _WIN32 || defined __CYGWIN__
+    char on = 1;
+#else
     int on = 1;
+#endif
     return setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 }
 
 static int __set_non_blocking(int fd)
 {
+#if defined _WIN32 || defined __CYGWIN__
+    u_long imode = 1L;
+    return ioctlsocket(fd, FIONBIO, &imode);
+#else
     int flags = fcntl(fd, F_GETFL, 0);
     if(flags == -1)
         return flags;
     flags = flags | O_NONBLOCK;
     return fcntl(fd, F_SETFL, flags);
+#endif
 }
 
 static int __get_socket_error(int fd, char *serrno)
@@ -237,15 +258,16 @@ void __tcp_on_read(as_tcp_t *tcp)
 #endif
     struct sockaddr_storage addr;
     unsigned int addrl = sizeof(struct sockaddr_storage);
-    struct msghdr msg;
-    char cntrlbuf[64];
-    struct iovec iov;
     unsigned char *buf = (unsigned char *) malloc(AS_BUFFER_SIZE);
     if(buf == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
+#if !(defined _WIN32 || defined __CYGWIN__)
+    struct msghdr msg;
+    char cntrlbuf[64];
+    struct iovec iov;
     memset(&msg, '\0', sizeof(struct msghdr));
     memset(cntrlbuf, '\0', 64);
     msg.msg_control = cntrlbuf;
@@ -256,9 +278,14 @@ void __tcp_on_read(as_tcp_t *tcp)
     iov.iov_len = AS_BUFFER_SIZE;
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
+#endif
     while(1)
     {
+#if defined _WIN32 || defined __CYGWIN__
+        ssize_t read = recv(tcp->sck.fd, buf, AS_BUFFER_SIZE, 0);
+#else
         ssize_t read = recvmsg(tcp->sck.fd, &msg, MSG_NOSIGNAL);
+#endif
         if(read > 0)
         {
             if(tcp->sck.read_flags & AS_READ_ONESHOT)
@@ -275,7 +302,15 @@ void __tcp_on_read(as_tcp_t *tcp)
             }
             if(tcp->read_cb != NULL)
             {
-                if(tcp->read_cb(tcp, &msg, buf, read) != 0)
+                if(tcp->read_cb(
+                    tcp
+#if defined _WIN32 || defined __CYGWIN__
+                    , NULL
+#else
+                    , &msg
+#endif
+                    , buf
+                    , read) != 0)
                 {
                     as_close((as_socket_t *) tcp);
                     free(buf);
@@ -399,15 +434,16 @@ void __udp_on_accept(as_udp_t *udp)
 {
     struct sockaddr_storage addr;
     unsigned int addrl = sizeof(struct sockaddr_storage);
-    struct msghdr msg;
-    char cntrlbuf[64];
-    struct iovec iov;
     unsigned char *buf = (unsigned char *) malloc(AS_BUFFER_SIZE);
     if(buf == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
+#if !(defined _WIN32 || defined __CYGWIN__)
+    struct msghdr msg;
+    char cntrlbuf[64];
+    struct iovec iov;
     memset(&msg, '\0', sizeof(struct msghdr));
     memset(cntrlbuf, '\0', 64);
     msg.msg_control = cntrlbuf;
@@ -419,6 +455,9 @@ void __udp_on_accept(as_udp_t *udp)
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
     ssize_t read = recvmsg(udp->sck.fd, &msg, MSG_NOSIGNAL);
+#else
+    ssize_t read = recvfrom(udp->sck.fd, buf, AS_BUFFER_SIZE, 0, (struct sockaddr *) &addr, &addrl);
+#endif
     if(read > 0)
     {
         as_udp_t *client = as_udp_init(udp->sck.loop, NULL, NULL);
@@ -438,7 +477,15 @@ void __udp_on_accept(as_udp_t *udp)
         }
         if(client->read_cb != NULL)
         {
-            if(client->read_cb(client, &msg, buf, read) != 0)
+            if(client->read_cb(
+                client
+#if defined _WIN32 || defined __CYGWIN__
+                , NULL
+#else
+                , &msg
+#endif
+                , buf
+                , read) != 0)
             {
                 as_close((as_socket_t *) client);
                 free(buf);
@@ -457,15 +504,16 @@ void __udp_on_read(as_udp_t *udp)
 #endif
     struct sockaddr_storage addr;
     unsigned int addrl = sizeof(struct sockaddr_storage);
-    struct msghdr msg;
-    char cntrlbuf[64];
-    struct iovec iov;
     unsigned char *buf = (unsigned char *) malloc(AS_BUFFER_SIZE);
     if(buf == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
+#if !(defined _WIN32 || defined __CYGWIN__)
+    struct msghdr msg;
+    char cntrlbuf[64];
+    struct iovec iov;
     memset(&msg, '\0', sizeof(struct msghdr));
     memset(cntrlbuf, '\0', 64);
     msg.msg_control = cntrlbuf;
@@ -476,9 +524,14 @@ void __udp_on_read(as_udp_t *udp)
     iov.iov_len = AS_BUFFER_SIZE;
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
+#endif
     while(1)
     {
+#if defined _WIN32 || defined __CYGWIN__
+        ssize_t read = recvfrom(udp->sck.fd, buf, AS_BUFFER_SIZE, 0, (struct sockaddr *) &addr, &addrl);
+#else
         ssize_t read = recvmsg(udp->sck.fd, &msg, MSG_NOSIGNAL);
+#endif
         if(read > 0)
         {
             if(udp->sck.read_flags & AS_READ_ONESHOT)
@@ -495,7 +548,15 @@ void __udp_on_read(as_udp_t *udp)
             }
             if(udp->read_cb != NULL)
             {
-                if(udp->read_cb(udp, &msg, buf, read) != 0)
+                if(udp->read_cb(
+                    udp
+#if defined _WIN32 || defined __CYGWIN__
+                    , NULL
+#else
+                    , &msg
+#endif
+                    , buf
+                    , read) != 0)
                 {
                     as_close((as_socket_t *) udp);
                     free(buf);
@@ -765,7 +826,11 @@ as_tcp_t *as_tcp_init(as_loop_t *loop, void *data, as_socket_destroying_f cb)
 
 int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
 {
+#if defined _WIN32 || defined __CYGWIN__
+    char on = 1;
+#else
     int on = 1;
+#endif
     if(tcp->sck.fd != SOCKET_LAZY_INIT)
         return 1;
     tcp->sck.fd = socket(addr->sa_family, SOCK_STREAM, IPPROTO_TCP);
@@ -783,6 +848,7 @@ int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
         }
         if(flags & AS_TCP_TPROXY)
         {
+#if !(defined _WIN32 || defined __CYGWIN__)
             //need root
             if(setsockopt(tcp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
             {
@@ -791,6 +857,7 @@ int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
             }
             if(setsockopt(tcp->sck.fd, SOL_IPV6, IPV6_RECVORIGDSTADDR, &on, sizeof(on)) != 0)
                 return 1;
+#endif
         }
         if(bind(tcp->sck.fd, addr, sizeof(struct sockaddr_in6)) != 0)
             return 1;
@@ -800,6 +867,7 @@ int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
     {
         if(flags & AS_TCP_TPROXY)
         {
+#if !(defined _WIN32 || defined __CYGWIN__)
             //need root
             if(setsockopt(tcp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
             {
@@ -808,6 +876,7 @@ int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
             }
             if(setsockopt(tcp->sck.fd, SOL_IP, IP_RECVORIGDSTADDR, &on, sizeof(on)) != 0)
                 return 1;
+#endif
         }
         if(bind(tcp->sck.fd, addr, sizeof(struct sockaddr_in)) != 0)
             return 1;
@@ -984,7 +1053,11 @@ as_udp_t *as_udp_init(as_loop_t *loop, void *data, as_socket_destroying_f cb)
 
 int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
 {
+#if defined _WIN32 || defined __CYGWIN__
+    char on = 1;
+#else
     int on = 1;
+#endif
     if(udp->sck.fd != SOCKET_LAZY_INIT)
         return 1;
     udp->sck.fd = socket(addr->sa_family, SOCK_DGRAM, IPPROTO_UDP);
@@ -1003,6 +1076,7 @@ int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
         }
         if(flags & AS_UDP_TPROXY)
         {
+#if !(defined _WIN32 || defined __CYGWIN__)
             //need root
             if(setsockopt(udp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
             {
@@ -1011,6 +1085,7 @@ int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
             }
             if(setsockopt(udp->sck.fd, SOL_IPV6, IPV6_RECVORIGDSTADDR, &on, sizeof(on)) != 0)
                 return 1;
+#endif
         }
         if(bind(udp->sck.fd, addr, sizeof(struct sockaddr_in6)) != 0)
             return 1;
@@ -1020,6 +1095,7 @@ int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
     {
         if(flags & AS_UDP_TPROXY)
         {
+#if !(defined _WIN32 || defined __CYGWIN__)
             //need root
             if(setsockopt(udp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
             {
@@ -1028,6 +1104,7 @@ int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
             }
             if(setsockopt(udp->sck.fd, SOL_IP, IP_RECVORIGDSTADDR, &on, sizeof(on)) != 0)
                 return 1;
+#endif
         }
         if(bind(udp->sck.fd, addr, sizeof(struct sockaddr_in)) != 0)
             return 1;

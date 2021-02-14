@@ -1,8 +1,15 @@
 #ifndef _ASCORE_H
 #define _ASCORE_H
 
-#include <stdio.h>
+#if defined _WIN32 || defined __CYGWIN__
+#include <winsock2.h>
+#include <Ws2tcpip.h>
+#include <ws2def.h>
+#define msghdr _WSAMSG
+#else
 #include <sys/socket.h>
+#endif
+#include <stdio.h>
 
 #define AS_READ_ONESHOT 0x01
 

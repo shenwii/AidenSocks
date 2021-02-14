@@ -1,11 +1,18 @@
-#include <netdb.h>
+#include "common.h"
+
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#if defined _WIN32 || defined __CYGWIN__
+#include <winsock2.h>
+#include <Ws2tcpip.h>
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include "common.h"
+#include <netdb.h>
+#endif
 
 static struct addrinfo *__gethostbyname(__const__ char *hostname)
 {

@@ -15,7 +15,12 @@ ASSERVER_BIN = $(BINDIR)/as-server
 CFLAGS += -Wall
 LDFLAGS += -lssl -lcrypto -liniparser
 
-ifdef DEBUG
+ifeq ($(OS),Windows_NT)
+CFLAGS += -D_WIN32_WINNT=0x0600
+LDFLAGS += -lws2_32
+endif
+
+ifeq ($(DEBUG),1)
 CFLAGS += -DDEBUG -g -O0
 else
 LDFLAGS += -s -Os
