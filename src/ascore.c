@@ -785,6 +785,11 @@ void __as_close(as_socket_t *sck)
 
 as_loop_t *as_loop_init()
 {
+#if defined _WIN32 || defined __CYGWIN__
+    WSADATA wsaData;
+    if(WSAStartup(MAKEWORD(2,2), &wsaData) != 0)
+        return NULL;
+#endif
     as_loop_t *loop = (as_loop_t *) malloc(sizeof(as_loop_t));
     if(loop == NULL)
     {
