@@ -129,11 +129,7 @@ static int __set_timeout(int fd)
 
 static int __set_reuseaddr(int fd)
 {
-#if defined _WIN32 || defined __CYGWIN__
-    char on = 1;
-#else
     int on = 1;
-#endif
     return setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 }
 
@@ -831,11 +827,7 @@ as_tcp_t *as_tcp_init(as_loop_t *loop, void *data, as_socket_destroying_f cb)
 
 int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
 {
-#if defined _WIN32 || defined __CYGWIN__
-    char on = 1;
-#else
     int on = 1;
-#endif
     if(tcp->sck.fd != SOCKET_LAZY_INIT)
         return 1;
     tcp->sck.fd = socket(addr->sa_family, SOCK_STREAM, IPPROTO_TCP);
@@ -1058,11 +1050,7 @@ as_udp_t *as_udp_init(as_loop_t *loop, void *data, as_socket_destroying_f cb)
 
 int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
 {
-#if defined _WIN32 || defined __CYGWIN__
-    char on = 1;
-#else
     int on = 1;
-#endif
     if(udp->sck.fd != SOCKET_LAZY_INIT)
         return 1;
     udp->sck.fd = socket(addr->sa_family, SOCK_DGRAM, IPPROTO_UDP);
