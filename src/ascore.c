@@ -341,7 +341,9 @@ void __tcp_on_connected(as_tcp_t *tcp)
 #ifdef __linux__
     struct epoll_event ev;
     memset(&ev, 0, sizeof(struct epoll_event));
+#endif
     tcp->sck.status |= AS_STATUS_CONNECTED;
+#ifdef __linux__
     tcp->sck.events &= ~EPOLLOUT;
     ev.data.fd = tcp->sck.fd;
     ev.data.ptr = tcp;
@@ -593,16 +595,19 @@ void __udp_fake_on_write(as_udp_t *udp)
     {
         if(buf->len == buf->wrote_len)
         {
-            buf->udp->udp_timeout = time(NULL);
-            if(buf->wrote_cb != NULL && buf->udp != NULL)
+            if(buf->udp != NULL)
             {
-                if(((as_udp_wrote_f) buf->wrote_cb)(buf->udp, buf->data, buf->len) != 0)
+                buf->udp->udp_timeout = time(NULL);
+                if(buf->wrote_cb != NULL)
                 {
-                    as_close((as_socket_t *) buf->udp);
-                    udp->sck.write_queue.header = buf->next;
-                    free(buf->data);
-                    free(buf);
-                    return;
+                    if(((as_udp_wrote_f) buf->wrote_cb)(buf->udp, buf->data, buf->len) != 0)
+                    {
+                        as_close((as_socket_t *) buf->udp);
+                        udp->sck.write_queue.header = buf->next;
+                        free(buf->data);
+                        free(buf);
+                        return;
+                    }
                 }
             }
             udp->sck.write_queue.header = buf->next;
@@ -691,10 +696,10 @@ void __udp_on_write(as_udp_t *udp)
         ev.data.ptr = udp;
         ev.events = udp->sck.events;
         epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
-        return;
 #else
         udp->sck.events &= ~AS_EVENTS_WRITE;
 #endif
+        return;
     }
     while(1)
     {
