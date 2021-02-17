@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #endif
 #if defined __linux__
 #include <sys/epoll.h>
@@ -22,7 +23,6 @@
 #endif
 #include <time.h>
 #include <fcntl.h>
-#include <errno.h>
 
 #define SOCKET_LAZY_INIT -1
 
@@ -47,6 +47,7 @@
 #if defined _WIN32 || defined __CYGWIN__
 typedef int socklen_t;
 #define MSG_NOSIGNAL 0
+#define errno WSAGetLastError()
 #endif
 
 struct as_loop_s
@@ -926,15 +927,25 @@ int as_tcp_connect(as_tcp_t *tcp, struct sockaddr *addr, as_tcp_connected_f cb)
     if(addr->sa_family == AF_INET6)
     {
         int rtn = connect(tcp->sck.fd, addr, sizeof(struct sockaddr_in6));
+#if defined _WIN32 || defined __CYGWIN__
+        if(rtn != 0 && errno != WSAEWOULDBLOCK)
+            return 1;
+#else
         if(rtn != 0 && errno != EINPROGRESS)
             return 1;
+#endif
         memcpy(&tcp->sck.addr, addr, sizeof(struct sockaddr_in6));
     }
     else
     {
         int rtn = connect(tcp->sck.fd, addr, sizeof(struct sockaddr_in));
+#if defined _WIN32 || defined __CYGWIN__
+        if(rtn != 0 && errno != WSAEWOULDBLOCK)
+            return 1;
+#else
         if(rtn != 0 && errno != EINPROGRESS)
             return 1;
+#endif
         memcpy(&tcp->sck.addr, addr, sizeof(struct sockaddr_in));
     }
     tcp->sck.status |= AS_STATUS_INEPOLL;
