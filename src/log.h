@@ -2,7 +2,6 @@
 #define _LOG_H
 
 #include "msg.h"
-#include <errno.h>
 #include <stdio.h>
 #include <time.h>
 

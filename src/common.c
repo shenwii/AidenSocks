@@ -94,8 +94,9 @@ char *address_str(struct sockaddr* addr)
     return addstr;
 }
 
-int parse_asp_address(__const__ unsigned char *buf, __const__ int len, struct sockaddr* addr)
+int parse_asp_address(__const__ unsigned char *buf, __const__ int len, struct sockaddr* addr, char *addr_str)
 {
+    char s[80];
     uint16_t *port;
     char dlen;
     char atyp;
@@ -112,6 +113,8 @@ int parse_asp_address(__const__ unsigned char *buf, __const__ int len, struct so
             ((struct sockaddr_in *) addr)->sin_family = AF_INET;
             ((struct sockaddr_in *) addr)->sin_port = *port;
             memcpy(&((struct sockaddr_in *) addr)->sin_addr, (char *) &buf[1], 4);
+            inet_ntop(AF_INET, &buf[1], s, 80);
+            sprintf(addr_str, "%s:%d", s, ntohs(*port));
             return 7;
         case 0x03:
             //domian
@@ -132,6 +135,11 @@ int parse_asp_address(__const__ unsigned char *buf, __const__ int len, struct so
                 else
                     ((struct sockaddr_in6 *) addr)->sin6_port = *port;
             }
+            sprintf(s,"%d", ntohs(*port));
+            memcpy(addr_str, &buf[2], len - 4);
+            addr_str[len - 4] = ':';
+            memcpy(&addr_str[len - 3], s, strlen(s));
+            addr_str[len - 3 + strlen(s)] = '\0';
             return dlen + 4;
         case 0x04:
             //ipv6
@@ -141,6 +149,8 @@ int parse_asp_address(__const__ unsigned char *buf, __const__ int len, struct so
             ((struct sockaddr_in6 *) addr)->sin6_family = AF_INET6;
             ((struct sockaddr_in6 *) addr)->sin6_port = *port;
             memcpy(&((struct sockaddr_in6 *) addr)->sin6_addr, (char *) &buf[1], 16);
+            inet_ntop(AF_INET6, &buf[1], s, 80);
+            sprintf(addr_str, "[%s]:%d", s, ntohs(*port));
             return 19;
         default:
             return -1;

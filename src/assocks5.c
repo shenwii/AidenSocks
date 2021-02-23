@@ -9,6 +9,12 @@
 #include "ascore.h"
 #include "log.h"
 #include "asprot.h"
+#if defined _WIN32 || defined __CYGWIN__
+#include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#endif
+
 
 #define SOCKS5_VERSION 0x05
 
@@ -38,6 +44,8 @@ typedef struct
 } __s5_buffer_t;
 
 struct sockaddr_storage server_addr;
+
+static int __socks5_address_str(__const__ unsigned char *buf, __const__ size_t len, char *addr_str);
 
 static int __destroy(as_socket_t *sck);
 
@@ -174,6 +182,44 @@ int main(int argc, char **argv)
     return 0;
 }
 
+static int __socks5_address_str(__const__ unsigned char *buf, __const__ size_t len, char *addr_str)
+{
+    char s[80];
+    uint16_t *port;
+    switch(buf[0])
+    {
+        case 1:
+            if(len < 7)
+                return -1;
+            port = (uint16_t *) &buf[5];
+            inet_ntop(AF_INET, &buf[1], s, 80);
+            sprintf(addr_str, "%s:%d", s, ntohs(*port));
+            return 7;
+        case 3:
+            if(len < 4)
+                return -1;
+            unsigned char hl = buf[1];
+            if(len < hl + 4)
+                return -1;
+            port = (uint16_t *) &buf[2 + hl];
+            sprintf(s,"%d", ntohs(*port));
+            memcpy(addr_str, &buf[2], len - 4);
+            addr_str[len - 4] = ':';
+            memcpy(&addr_str[len - 3], s, strlen(s));
+            addr_str[len - 3 + strlen(s)] = '\0';
+            return hl + 4;
+        case 4:
+            if(len < 19)
+                return -1;
+            port = (uint16_t *) &buf[17];
+            inet_ntop(AF_INET6, &buf[1], s, 80);
+            sprintf(addr_str, "[%s]:%d", s, ntohs(*port));
+            return 19;
+        default:
+            return -1;
+    }
+}
+
 static int __destroy(as_socket_t *sck)
 {
     __s5_buffer_t *s5_buf = (__s5_buffer_t *) as_socket_data(sck);
@@ -273,6 +319,7 @@ static int __s5_auth(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ siz
 
 static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
 {
+    char addr_str[256];
     unsigned char resbuf[10];
     memset(resbuf, 0, 10);
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
@@ -293,39 +340,12 @@ static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
     {
         case 0x01:
         {
-            switch(header->atyp)
+            if(__socks5_address_str(data - 1, data_len + 1, addr_str) != data_len + 1)
             {
-                case 1:
-                    if(data_len != 6)
-                    {
-                        free(s5_buf->conn_buf);
-                        return 1;
-                    }
-                    break;
-                case 3:
-                    if(data_len < 3)
-                    {
-                        free(s5_buf->conn_buf);
-                        return 1;
-                    }
-                    unsigned char hl = data[0];
-                    if(data_len != hl + 3)
-                    {
-                        free(s5_buf->conn_buf);
-                        return 1;
-                    }
-                    break;
-                case 4:
-                    if(data_len != 18)
-                    {
-                        free(s5_buf->conn_buf);
-                        return 1;
-                    }
-                    break;
-                default:
-                    free(s5_buf->conn_buf);
-                    return 1;
+                free(s5_buf->conn_buf);
+                return 1;
             }
+            LOG_INFO("%s tcp connect to %s\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), addr_str);
             unsigned char *sdata = (unsigned char *) malloc(ASP_MAX_DATA_LENGTH(data_len + 1));
             size_t sdlen;
             if(sdata == NULL)
@@ -402,43 +422,21 @@ static int __s5_tcp_forward(as_tcp_t *clnt, __const__ unsigned char *buf, __cons
 
 static int __s5_udp_forward(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
 {
-    __s5_udp_forward_t *header;
+    char addr_str[256];
+    int addr_len;
     int headerlen = sizeof(__s5_udp_forward_t);
     if(len <= headerlen)
         return 1;
-    header = (__s5_udp_forward_t *) buf;
     unsigned char *data = (unsigned char *) &buf[headerlen];
     size_t data_len = len - headerlen;
     as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
     if(as_udp_connect(remote, (struct sockaddr *) &server_addr) != 0)
         return 1;
     as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
-    switch(header->atyp)
-    {
-        case 1:
-        {
-            if(data_len <= 6)
-                return 1;
-        }
-            break;
-        case 3:
-        {
-            if(data_len < 3)
-                return 1;
-            unsigned char hl = data[0];
-            if(data_len <= hl + 3)
-                return 1;
-        }
-            break;
-        case 4:
-        {
-            if(data_len <= 18)
-                return 1;
-        }
-            break;
-        default:
-            return 1;
-    }
+    addr_len = __socks5_address_str(data - 1, data_len + 1, addr_str);
+    if(addr_len == -1 || addr_len >= data_len + 1)
+        return 1;
+    LOG_INFO("%s udp send to %s\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), addr_str);
     unsigned char *sdata = malloc(ASP_MAX_DATA_LENGTH(data_len + 1));
     size_t sdlen;
     if(sdata == NULL)

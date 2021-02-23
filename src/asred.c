@@ -253,6 +253,7 @@ static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
         return 1;
     if(__redirect_destaddr(as_fd((as_socket_t *) clnt), &destaddr) != 0)
         return 1;
+    LOG_INFO("tcp redirect to %s\n", address_str((struct sockaddr *) &destaddr));
     unsigned char buf[19];
     size_t len;
     if(destaddr.ss_family == AF_INET)
@@ -368,6 +369,7 @@ static int __udp_client_on_read(as_udp_t *clnt, __const__ struct msghdr *msg, __
     as_udp_t *remote = (as_udp_t *) as_socket_map((as_socket_t *) clnt);
     if(__tproxy_destaddr((struct msghdr *) msg, &destaddr) != 0)
         return 1;
+    LOG_INFO("udp redirect to %s\n", address_str((struct sockaddr *) &destaddr));
     unsigned char addr_buf[19 + len];
     size_t addr_len;
     if(destaddr.ss_family == AF_INET)

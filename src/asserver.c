@@ -181,6 +181,7 @@ static int __tcp_client_on_read(as_tcp_t *clnt, __const__ struct msghdr *msg, __
 
 static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len)
 {
+    char addr_str[256];
     as_tcp_t *clnt = (as_tcp_t *) parm;
     struct sockaddr_storage addr;
     if(status != 0)
@@ -190,8 +191,9 @@ static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const
     {
         if(as_data->proc == 0)
         {
-            if(parse_asp_address(buf, len, (struct sockaddr*) &addr) != len)
+            if(parse_asp_address(buf, len, (struct sockaddr*) &addr, addr_str) != len)
                 return 1;
+            LOG_INFO("%s tcp connect to %s\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), addr_str);
             as_tcp_t *remote = as_tcp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
             as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
             return as_tcp_connect(remote, (struct sockaddr*) &addr, __tcp_remote_on_connected);
@@ -306,6 +308,7 @@ static int __udp_client_on_read(as_udp_t *clnt, __const__ struct msghdr *msg, __
 
 static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const__ char status, __const__ unsigned char *buf, __const__ size_t len)
 {
+    char addr_str[256];
     as_udp_t *clnt = (as_udp_t *) parm;
     int addr_len;
     struct sockaddr_storage addr;
@@ -313,9 +316,10 @@ static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const
         return 1;
     if(type == 0x21)
     {
-        addr_len = parse_asp_address(buf, len, (struct sockaddr*) &addr);
+        addr_len = parse_asp_address(buf, len, (struct sockaddr*) &addr, addr_str);
         if(addr_len == -1 || addr_len >= len)
             return 1;
+        LOG_INFO("%s udp send to %s\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), addr_str);
         as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
         as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
         if(as_udp_connect(remote, (struct sockaddr*) &addr) != 0)

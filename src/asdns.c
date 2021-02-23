@@ -204,6 +204,8 @@ static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
 {
     if(status != 0)
         return 1;
+    as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
+    LOG_INFO("%s tcp connect to %s:%d\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), conf.dns_server, conf.dns_port);
     unsigned char hl = strlen(conf.dns_server);
     unsigned char buf[hl + 4];
     uint16_t pp = htons(conf.dns_port);
@@ -305,6 +307,7 @@ static int __udp_client_on_connect(as_udp_t *srv, as_udp_t *clnt, void **data, a
 static int __udp_client_on_read(as_udp_t *clnt, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_udp_t *remote = (as_udp_t *) as_socket_map((as_socket_t *) clnt);
+    LOG_INFO("%s udp send to %s:%d\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), conf.dns_server, conf.dns_port);
     unsigned char hl = strlen(conf.dns_server);
     unsigned char sbuf[hl + 4 + len];
     uint16_t pp = htons(conf.dns_port);
