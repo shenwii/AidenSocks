@@ -272,10 +272,11 @@ static int __parse_asp_address(as_socket_t *sck, __const__ unsigned char *buf, _
             port = (uint16_t *) &buf[5];
             ((struct sockaddr_in *) &addr)->sin_family = AF_INET;
             ((struct sockaddr_in *) &addr)->sin_port = *port;
-            memcpy(&((struct sockaddr_in *) &addr)->sin_addr, (char *) &buf[1], 4);
+            memcpy(&((struct sockaddr_in *) &addr)->sin_addr, &buf[1], 4);
             inet_ntop(AF_INET, &buf[1], s, 80);
             sprintf(addr_str, "%s:%d", s, ntohs(*port));
             as_data->addr_len = 7;
+            as_data->port = *port;
             if(cb(sck, 0, (struct sockaddr *) &addr) != 0)
                 return -2;
             return 7;
@@ -309,10 +310,11 @@ static int __parse_asp_address(as_socket_t *sck, __const__ unsigned char *buf, _
             port = (uint16_t *) &buf[17];
             ((struct sockaddr_in6 *) &addr)->sin6_family = AF_INET6;
             ((struct sockaddr_in6 *) &addr)->sin6_port = *port;
-            memcpy(&((struct sockaddr_in6 *) &addr)->sin6_addr, (char *) &buf[1], 16);
+            memcpy(&((struct sockaddr_in6 *) &addr)->sin6_addr, &buf[1], 16);
             inet_ntop(AF_INET6, &buf[1], s, 80);
             sprintf(addr_str, "[%s]:%d", s, ntohs(*port));
             as_data->addr_len = 19;
+            as_data->port = *port;
             if(cb(sck, 0, (struct sockaddr *) &addr) != 0)
                 return -2;
             return 19;
