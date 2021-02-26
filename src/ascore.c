@@ -1,18 +1,21 @@
 #include "ascore.h"
 #include "log.h"
+#include "dnsprot.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #if defined _WIN32 || defined __CYGWIN__
 #include <winsock2.h>
+#include <iphlpapi.h>
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <errno.h>
+#include <resolv.h>
 #endif
 #if defined __linux__
 #include <sys/epoll.h>
@@ -29,11 +32,13 @@
 #define SOCKET_TYPE_TCP 1
 #define SOCKET_TYPE_UDP 2
 #define SOCKET_TYPE_UDP_FAKE 4
+#define SOCKET_TYPE_UDP_DNS 8
 
 #define AS_STATUS_CONNECTED 0x01
 #define AS_STATUS_LISTENED 0x02
 #define AS_STATUS_CLOSED 0x08
 #define AS_STATUS_INEPOLL 0x10
+#define AS_STATUS_RESOLVING 0x20
 
 #define IO_MUXING_TIMEOUT 500
 
@@ -47,7 +52,9 @@
 #if defined _WIN32 || defined __CYGWIN__
 typedef int socklen_t;
 #define MSG_NOSIGNAL 0
-#define errno WSAGetLastError()
+#define SOCK_ERRNO WSAGetLastError()
+#else
+#define SOCK_ERRNO errno
 #endif
 
 struct as_loop_s
@@ -61,6 +68,7 @@ struct as_loop_s
     fd_set write_set;
     fd_set except_set;
 #endif
+    struct sockaddr_storage dns_server;
 };
 
 typedef struct as_buffer_s
@@ -116,7 +124,20 @@ struct as_udp_s
     time_t udp_timeout;
     as_udp_accepted_f accept_cb;
     as_udp_read_f read_cb;
+    time_t dns_request_time;
+    int dns_try_cnt;
+    unsigned char *dns_buf;
+    size_t dns_buf_len;
 };
+
+typedef struct
+{
+    as_resolved_f dns_cb;
+    as_socket_t *target;
+    size_t dns_recved_cnt;
+    size_t dns_prtcl_cnt;
+    dns_prtcl_t dns_prtcl[2];
+} dns_data_t;
 
 static int __set_timeout(int fd)
 {
@@ -154,6 +175,73 @@ static int __get_socket_error(int fd, char *serrno)
     return getsockopt(fd, SOL_SOCKET, SO_ERROR, serrno, &len);
 }
 
+int __dns_priority(dns_resr_t *dns_resr)
+{
+    if(dns_resr->type == 0x1c)
+        return 1;
+    if(dns_resr->type == 0x01)
+        return 2;
+    return 99;
+}
+
+void __dns_rspn_filter(dns_data_t *dns_data)
+{
+    struct sockaddr_storage addr;
+    dns_prtcl_t *tdp;
+    dns_resr_t *tdr;
+    int pl = 99;
+    int tpl;
+    dns_resr_t *presrc = NULL;
+    int rtn;
+    if(dns_data->target->status & AS_STATUS_CLOSED)
+    {
+        free(dns_data);
+        return;
+    }
+    for(int i = 0; i < dns_data->dns_prtcl_cnt; i++)
+    {
+        tdp = &dns_data->dns_prtcl[i];
+        for(int j = 0; j < tdp->header.an_count; j++)
+        {
+            tdr = &tdp->answer[j];
+            if(tdr->type != 0x01 && tdr->type != 0x1c)
+                continue;
+            tpl = __dns_priority(tdr);
+            if(tpl < pl)
+            {
+                presrc = tdr;
+                pl = tpl;
+            }
+        }
+    }
+    if(presrc != NULL)
+    {
+        if(presrc->type == 0x01)
+        {
+            struct sockaddr_in *in_addr = (struct sockaddr_in *) &addr;
+            in_addr->sin_family = AF_INET;
+            in_addr->sin_port = htons(53);
+            memcpy(&in_addr->sin_addr, presrc->data, 4);
+        }
+        else
+        {
+            struct sockaddr_in6 *in_addr6 = (struct sockaddr_in6 *) &addr;
+            in_addr6->sin6_family = AF_INET;
+            in_addr6->sin6_port = htons(53);
+            memcpy(&in_addr6->sin6_addr, presrc->data, 16);
+        }
+        rtn = dns_data->dns_cb(dns_data->target, 0, (struct sockaddr *) &addr);
+    }
+    else
+    {
+        rtn = dns_data->dns_cb(dns_data->target, 1, NULL);
+    }
+    dns_data->target->status &= ~AS_STATUS_RESOLVING;
+    if(rtn != 0)
+        as_close(dns_data->target);
+    free(dns_data);
+}
+
 static void __as_socket_init(as_socket_t *sck, as_loop_t *loop, void *data, as_socket_destroying_f cb)
 {
     memset(sck, 0, sizeof(as_socket_t));
@@ -182,7 +270,7 @@ static void __free_write_queue(as_socket_t *sck)
     }
 }
 
-static void __socket_close_event(as_loop_t *loop)
+static void __socket_loop_event(as_loop_t *loop)
 {
     void *sfree;
     as_socket_t *s, *p;
@@ -190,7 +278,7 @@ static void __socket_close_event(as_loop_t *loop)
     p = NULL;
     while(s != NULL)
     {
-        if(s->status & AS_STATUS_CLOSED)
+        if((s->status & AS_STATUS_CLOSED) && !(s->status & AS_STATUS_RESOLVING))
         {
             if(p == NULL)
                 loop->header = s->next;
@@ -211,6 +299,12 @@ static void __socket_close_event(as_loop_t *loop)
                     LOG_DEBUG("%d is closed\n", s->fd);
                 }
             }
+            if(s->type == SOCKET_TYPE_UDP_DNS)
+            {
+                as_udp_t *udp = (as_udp_t *) s;
+                if(udp->dns_buf_len != 0)
+                    free(udp->dns_buf);
+            }
             if(s->map != NULL)
                 s->map->map = NULL;
             sfree = s;
@@ -222,6 +316,27 @@ static void __socket_close_event(as_loop_t *loop)
         {
             if(difftime(time(NULL), ((as_udp_t *) s)->udp_timeout) > AS_SOCKET_TIMEOUT)
                 as_close(s);
+        }
+        if(s->type == SOCKET_TYPE_UDP_DNS)
+        {
+            as_udp_t *udp = (as_udp_t *) s;
+            if(difftime(time(NULL), udp->dns_request_time) > 1)
+            {
+                if(udp->dns_try_cnt >= 10)
+                {
+                    dns_data_t *dns_data = (dns_data_t *) udp->sck.data;
+                    dns_data->dns_recved_cnt++;
+                    if(dns_data->dns_recved_cnt == 2)
+                        __dns_rspn_filter(dns_data);
+                    as_close(s);
+                }
+                else
+                {
+                    as_udp_write(udp, udp->dns_buf, udp->dns_buf_len, NULL);
+                    udp->dns_request_time = time(NULL);
+                    udp->dns_try_cnt++;
+                }
+            }
         }
         p = s;
         s = s->next;
@@ -321,7 +436,7 @@ void __tcp_on_read(as_tcp_t *tcp)
         }
         else
         {
-            switch (errno)
+            switch (SOCK_ERRNO)
             {
             case EAGAIN:
                 break;
@@ -414,7 +529,7 @@ void __tcp_on_write(as_tcp_t *tcp)
         }
         else
         {
-            switch (errno)
+            switch (SOCK_ERRNO)
             {
             case EAGAIN:
                 break;
@@ -569,7 +684,7 @@ void __udp_on_read(as_udp_t *udp)
         }
         else
         {
-            switch (errno)
+            switch (SOCK_ERRNO)
             {
             case EAGAIN:
                 break;
@@ -646,7 +761,7 @@ void __udp_fake_on_write(as_udp_t *udp)
         }
         else
         {
-            switch (errno)
+            switch (SOCK_ERRNO)
             {
             case EAGAIN:
                 break;
@@ -715,7 +830,7 @@ void __udp_on_write(as_udp_t *udp)
         }
         else
         {
-            switch (errno)
+            switch (SOCK_ERRNO)
             {
             case EAGAIN:
                 break;
@@ -728,6 +843,18 @@ void __udp_on_write(as_udp_t *udp)
         }
         break;
     }
+}
+
+int __udp_dns_read_callback(as_udp_t *udp, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
+{
+    dns_data_t *dns_data = (dns_data_t *) udp->sck.data;
+    dns_data->dns_recved_cnt++;
+    if(dns_response_parse(buf, len, &dns_data->dns_prtcl[dns_data->dns_prtcl_cnt]) == 0)
+        dns_data->dns_prtcl_cnt++;
+    if(dns_data->dns_recved_cnt == 2)
+        __dns_rspn_filter(dns_data);
+    as_close((as_socket_t *) udp);
+    return 0;
 }
 
 void __socket_handle_read(as_socket_t *sck)
@@ -806,6 +933,66 @@ as_loop_t *as_loop_init()
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
+    struct __res_state statp;
+    if(res_ninit(&statp) < 0)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    while(1)
+    {
+        if(statp._u._ext.nscount != 0)
+        {
+            memcpy(&loop->dns_server, statp._u._ext.nsaddrs[0], sizeof(struct sockaddr_in6));
+            break;
+        }
+        if(statp.nscount != 0)
+        {
+            memcpy(&loop->dns_server, &statp.nsaddr_list[0], sizeof(struct sockaddr_in));
+            break;
+        }
+        LOG_ERR(MSG_DNS_NAMESERVER_NOT_FOUND);
+        abort();
+    }
+#else
+    IP_ADAPTER_ADDRESSES *ad_address = NULL;
+    IP_ADAPTER_ADDRESSES *cur_address = NULL;
+    ULONG buffer_len = 16 * 1024 * 1024;
+    IP_ADAPTER_DNS_SERVER_ADDRESS *dns_server = NULL;
+    ad_address = (IP_ADAPTER_ADDRESSES *) malloc(buffer_len);
+    if(ad_address == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    if(GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, ad_address, &buffer_len) != 0)
+    {
+        LOG_ERR(MSG_DNS_NAMESERVER_NOT_FOUND);
+        abort();
+    }
+    for(cur_address = ad_address; cur_address != NULL; cur_address = cur_address->Next)
+    {
+        for(dns_server = cur_address->FirstDnsServerAddress; dns_server != NULL; dns_server = dns_server->Next)
+        {
+            if(dns_server->Address.lpSockaddr->sa_family == AF_INET6)
+            {
+                memcpy(&loop->dns_server, dns_server->Address.lpSockaddr, sizeof(struct sockaddr_in6));
+                ((struct sockaddr_in6 *) &loop->dns_server)->sin6_port = htons(53);
+            }
+            else if(dns_server->Address.lpSockaddr->sa_family == AF_INET)
+            {
+                memcpy(&loop->dns_server, dns_server->Address.lpSockaddr, sizeof(struct sockaddr_in));
+                ((struct sockaddr_in *) &loop->dns_server)->sin_port = htons(53);
+            }
+            else
+            {
+                continue;
+            }
+            return loop;
+        }
+    }
+    LOG_ERR(MSG_DNS_NAMESERVER_NOT_FOUND);
+    abort();
 #endif
     return loop;
 }
@@ -928,10 +1115,10 @@ int as_tcp_connect(as_tcp_t *tcp, struct sockaddr *addr, as_tcp_connected_f cb)
     {
         int rtn = connect(tcp->sck.fd, addr, sizeof(struct sockaddr_in6));
 #if defined _WIN32 || defined __CYGWIN__
-        if(rtn != 0 && errno != WSAEWOULDBLOCK)
+        if(rtn != 0 && SOCK_ERRNO != WSAEWOULDBLOCK)
             return 1;
 #else
-        if(rtn != 0 && errno != EINPROGRESS)
+        if(rtn != 0 && SOCK_ERRNO != EINPROGRESS)
             return 1;
 #endif
         memcpy(&tcp->sck.addr, addr, sizeof(struct sockaddr_in6));
@@ -940,10 +1127,10 @@ int as_tcp_connect(as_tcp_t *tcp, struct sockaddr *addr, as_tcp_connected_f cb)
     {
         int rtn = connect(tcp->sck.fd, addr, sizeof(struct sockaddr_in));
 #if defined _WIN32 || defined __CYGWIN__
-        if(rtn != 0 && errno != WSAEWOULDBLOCK)
+        if(rtn != 0 && SOCK_ERRNO != WSAEWOULDBLOCK)
             return 1;
 #else
-        if(rtn != 0 && errno != EINPROGRESS)
+        if(rtn != 0 && SOCK_ERRNO != EINPROGRESS)
             return 1;
 #endif
         memcpy(&tcp->sck.addr, addr, sizeof(struct sockaddr_in));
@@ -1061,6 +1248,9 @@ as_udp_t *as_udp_init(as_loop_t *loop, void *data, as_socket_destroying_f cb)
     udp->udp_server = NULL;
     udp->accept_cb = NULL;
     udp->read_cb = NULL;
+    udp->dns_try_cnt = 0;
+    udp->dns_buf = NULL;
+    udp->dns_buf_len = 0;
     return udp;
 }
 
@@ -1283,6 +1473,68 @@ int as_udp_write(as_udp_t *udp, __const__ unsigned char *buf, __const__ size_t l
     return 0;
 }
 
+int as_resolver(as_socket_t *sck, __const__ char *host, as_resolved_f cb)
+{
+    dns_hdr_flag_t dns_hdr_flag;
+    memset(&dns_hdr_flag, 0, sizeof(dns_hdr_flag_t));
+    int cnt = 2;
+    struct sockaddr_storage addr;
+    struct sockaddr_in6 *in_addr6 = (struct sockaddr_in6 *) &addr;
+    struct sockaddr_in *in_addr = (struct sockaddr_in *) &addr;
+    int rtn;
+    if(strlen(host) > 255)
+        return 1;
+    rtn = inet_pton(AF_INET6, host, &in_addr6->sin6_addr);
+    if(rtn == 1)
+    {
+        in_addr6->sin6_family = AF_INET6;
+        return cb(sck, 0, (struct sockaddr *) &addr);
+    }
+    rtn = inet_pton(AF_INET, host, &in_addr->sin_addr);
+    if(rtn == 1)
+    {
+        in_addr->sin_family = AF_INET;
+        return cb(sck, 0, (struct sockaddr *) &addr);
+    }
+    dns_hdr_flag.flag_rd = 1;
+    dns_data_t *dns_data = malloc(sizeof(dns_data_t));
+    if(dns_data == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    memset(dns_data, 0, sizeof(dns_data_t));
+    dns_data->dns_cb = cb;
+    dns_data->target = sck;
+    while(cnt--)
+    {
+        as_udp_t *udp = as_udp_init(sck->loop, dns_data, NULL);
+        udp->sck.type = SOCKET_TYPE_UDP_DNS;
+        if(as_udp_connect(udp, (struct sockaddr *) &sck->loop->dns_server) != 0)
+        {
+            dns_data->dns_recved_cnt++;
+            continue;
+        }
+        udp->dns_buf = malloc(280);
+        if(udp->dns_buf == NULL)
+        {
+            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+            abort();
+        }
+        udp->dns_buf_len = dns_request_data(cnt + 1, &dns_hdr_flag, (char *) host, 1, 1, udp->dns_buf);
+        as_udp_write(udp, udp->dns_buf, udp->dns_buf_len, NULL);
+        udp->dns_request_time = time(NULL);
+        as_udp_read_start(udp, __udp_dns_read_callback, AS_READ_ONESHOT);
+    }
+    if(dns_data->dns_recved_cnt == 2)
+    {
+        free(dns_data);
+        return 1;
+    }
+    sck->status |= AS_STATUS_RESOLVING;
+    return 0;
+}
+
 void as_socket_map_bind(as_socket_t *sck1, as_socket_t *sck2)
 {
     sck1->map = sck2;
@@ -1342,7 +1594,7 @@ int as_loop_run(as_loop_t *loop)
     int wait_count;
     while(1)
     {
-        __socket_close_event(loop);
+        __socket_loop_event(loop);
 #ifdef __linux__
         wait_count = epoll_wait(loop->epfd, events, AS_EPOLL_NUM, IO_MUXING_TIMEOUT);
         for(int i = 0; i < wait_count; i++)
@@ -1431,13 +1683,13 @@ int as_loop_run(as_loop_t *loop)
         }
         else if(wait_count < 0)
         {
-            if(errno == EINTR)
+            if(SOCK_ERRNO == EINTR)
             {
                 continue;
             }
             else
             {
-                LOG_ERR(MSG_BUG, errno);
+                LOG_ERR(MSG_BUG, SOCK_ERRNO);
             }
         }
 #endif
