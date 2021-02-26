@@ -484,6 +484,7 @@ static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const
             LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
             abort();
         }
+        memcpy(as_data->buf, buf, len);
         as_data->buf_len = len;
         addr_len = __parse_asp_address((as_socket_t *) clnt, buf, len, addr_str, __udp_client_dns_resolved);
         if(addr_len == -1)
