@@ -20,6 +20,7 @@ typedef struct
     asp_buffer_t as_buf;
     char connect_status;
     char proc;
+    uint16_t port;
     unsigned char *buf;
     size_t buf_len;
     int addr_len;
@@ -182,6 +183,14 @@ static int __tcp_client_dns_resolved(as_socket_t *sck, __const__ char status, __
     {
         as_tcp_t *remote = as_tcp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
         as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
+        if(addr->sa_family == AF_INET)
+        {
+            ((struct sockaddr_in *) addr)->sin_port = as_data->port;
+        }
+        else
+        {
+            ((struct sockaddr_in6 *) addr)->sin6_port = as_data->port;
+        }
         return as_tcp_connect(remote, (struct sockaddr*) &addr, __tcp_remote_on_connected);
     }
     else
@@ -211,20 +220,36 @@ static int __udp_client_dns_resolved(as_socket_t *sck, __const__ char status, __
         free(as_data->buf);
         return 1;
     }
-    as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
-    as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
-    if(as_udp_connect(remote, (struct sockaddr*) &addr) != 0)
+    if(status == 0)
+    {
+        as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
+        as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
+        if(addr->sa_family == AF_INET)
+        {
+            ((struct sockaddr_in *) addr)->sin_port = as_data->port;
+        }
+        else
+        {
+            ((struct sockaddr_in6 *) addr)->sin6_port = as_data->port;
+        }
+        if(as_udp_connect(remote, (struct sockaddr*) &addr) != 0)
+        {
+            free(as_data->buf);
+            return 1;
+        }
+        if(as_udp_read_start(remote, __udp_remote_on_read, AS_READ_ONESHOT) != 0)
+        {
+            free(as_data->buf);
+            return 1;
+        }
+        as_udp_write(remote, as_data->buf + as_data->addr_len, as_data->buf_len - as_data->addr_len, NULL);
+        return 0;
+    }
+    else
     {
         free(as_data->buf);
         return 1;
     }
-    if(as_udp_read_start(remote, __udp_remote_on_read, AS_READ_ONESHOT) != 0)
-    {
-        free(as_data->buf);
-        return 1;
-    }
-    as_udp_write(remote, as_data->buf + as_data->addr_len, as_data->buf_len - as_data->addr_len, NULL);
-    return 0;
 }
 
 static int __parse_asp_address(as_socket_t *sck, __const__ unsigned char *buf, __const__ int len, char *addr_str, as_resolved_f cb)
@@ -267,6 +292,7 @@ static int __parse_asp_address(as_socket_t *sck, __const__ unsigned char *buf, _
                 memcpy(addrstr, (char *) &buf[2], dlen);
                 addrstr[(int) dlen] = '\0';
                 as_data->addr_len = dlen + 4;
+                as_data->port = *port;
                 if(as_resolver(sck, addrstr, cb) != 0)
                     return -2;
             }
