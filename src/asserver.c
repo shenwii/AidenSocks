@@ -1,6 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#if defined _WIN32 || defined __CYGWIN__
+#include <Ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
 
 #include "iconf.h"
 #include "aes.h"
@@ -15,11 +20,20 @@ typedef struct
     asp_buffer_t as_buf;
     char connect_status;
     char proc;
+    unsigned char *buf;
+    size_t buf_len;
+    int addr_len;
 } __as_data_t;
 
 unsigned char aes_key[AES_KEY_LEN / 8];
 
 static int __destroy(as_socket_t *sck);
+
+static int __tcp_client_dns_resolved(as_socket_t *sck, __const__ char status, __const__ struct sockaddr *addr);
+
+static int __udp_client_dns_resolved(as_socket_t *sck, __const__ char status, __const__ struct sockaddr *addr);
+
+static int __parse_asp_address(as_socket_t *sck, __const__ unsigned char *buf, __const__ int len, char *addr_str, as_resolved_f cb);
 
 static int __tcp_client_on_accepted(as_tcp_t *srv, as_tcp_t *clnt, void **data, as_socket_destroying_f *cb);
 
@@ -158,6 +172,129 @@ static int __destroy(as_socket_t *sck)
     return 0;
 }
 
+static int __tcp_client_dns_resolved(as_socket_t *sck, __const__ char status, __const__ struct sockaddr *addr)
+{
+    as_tcp_t *clnt = (as_tcp_t *) sck;
+    __as_data_t *as_data = (__as_data_t *) as_socket_data(sck);
+    if(as_data->addr_len != as_data->buf_len)
+        return 1;
+    if(status == 0)
+    {
+        as_tcp_t *remote = as_tcp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
+        as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
+        return as_tcp_connect(remote, (struct sockaddr*) &addr, __tcp_remote_on_connected);
+    }
+    else
+    {
+        __as_data_t *as_data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
+        unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(0));
+        size_t dlen;
+        if(data == NULL)
+        {
+            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+            abort();
+        }
+        asp_encrypt(0x11, status, NULL, 0, aes_key, data, &dlen);
+        as_data->connect_status = status;
+        as_tcp_write(clnt, data, dlen, __tcp_client_on_wrote);
+        free(data);
+        return 0;
+    }
+}
+
+static int __udp_client_dns_resolved(as_socket_t *sck, __const__ char status, __const__ struct sockaddr *addr)
+{
+    as_udp_t *clnt = (as_udp_t *) sck;
+    __as_data_t *as_data = (__as_data_t *) as_socket_data(sck);
+    if(as_data->addr_len == -1 || as_data->addr_len >= as_data->buf_len)
+    {
+        free(as_data->buf);
+        return 1;
+    }
+    as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
+    as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
+    if(as_udp_connect(remote, (struct sockaddr*) &addr) != 0)
+    {
+        free(as_data->buf);
+        return 1;
+    }
+    if(as_udp_read_start(remote, __udp_remote_on_read, AS_READ_ONESHOT) != 0)
+    {
+        free(as_data->buf);
+        return 1;
+    }
+    as_udp_write(remote, as_data->buf + as_data->addr_len, as_data->buf_len - as_data->addr_len, NULL);
+    return 0;
+}
+
+static int __parse_asp_address(as_socket_t *sck, __const__ unsigned char *buf, __const__ int len, char *addr_str, as_resolved_f cb)
+{
+    __as_data_t *as_data = (__as_data_t *) as_socket_data(sck);
+    struct sockaddr_storage addr;
+    char s[80];
+    uint16_t *port;
+    char dlen;
+    char atyp;
+    if(len == 0)
+        return -1;
+    atyp = buf[0];
+    switch(atyp)
+    {
+        case 0x01:
+            //ipv4
+            if(len < 7)
+                return -1;
+            port = (uint16_t *) &buf[5];
+            ((struct sockaddr_in *) &addr)->sin_family = AF_INET;
+            ((struct sockaddr_in *) &addr)->sin_port = *port;
+            memcpy(&((struct sockaddr_in *) &addr)->sin_addr, (char *) &buf[1], 4);
+            inet_ntop(AF_INET, &buf[1], s, 80);
+            sprintf(addr_str, "%s:%d", s, ntohs(*port));
+            as_data->addr_len = 7;
+            if(cb(sck, 0, (struct sockaddr *) &addr) != 0)
+                return -2;
+            return 7;
+        case 0x03:
+            //domian
+            if(len < 2)
+                return -1;
+            dlen = buf[1];
+            if(len < dlen + 4)
+                return -1;
+            port = (uint16_t *) &buf[2 + dlen];
+            {
+                char addrstr[dlen + 1];
+                memcpy(addrstr, (char *) &buf[2], dlen);
+                addrstr[(int) dlen] = '\0';
+                as_data->addr_len = dlen + 4;
+                if(as_resolver(sck, addrstr, cb) != 0)
+                    return -2;
+            }
+            sprintf(s,"%d", ntohs(*port));
+            memcpy(addr_str, &buf[2], len - 4);
+            addr_str[len - 4] = ':';
+            memcpy(&addr_str[len - 3], s, strlen(s));
+            addr_str[len - 3 + strlen(s)] = '\0';
+            return dlen + 4;
+        case 0x04:
+            //ipv6
+            if(len < 19)
+                return -1;
+            port = (uint16_t *) &buf[17];
+            ((struct sockaddr_in6 *) &addr)->sin6_family = AF_INET6;
+            ((struct sockaddr_in6 *) &addr)->sin6_port = *port;
+            memcpy(&((struct sockaddr_in6 *) &addr)->sin6_addr, (char *) &buf[1], 16);
+            inet_ntop(AF_INET6, &buf[1], s, 80);
+            sprintf(addr_str, "[%s]:%d", s, ntohs(*port));
+            as_data->addr_len = 19;
+            if(cb(sck, 0, (struct sockaddr *) &addr) != 0)
+                return -2;
+            return 19;
+        default:
+            return -1;
+    }
+}
+
 static int __tcp_client_on_accepted(as_tcp_t *srv, as_tcp_t *clnt, void **data, as_socket_destroying_f *cb)
 {
     *data = malloc(sizeof(__as_data_t));
@@ -183,7 +320,6 @@ static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const
 {
     char addr_str[256];
     as_tcp_t *clnt = (as_tcp_t *) parm;
-    struct sockaddr_storage addr;
     if(status != 0)
         return 1;
     __as_data_t *as_data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
@@ -191,12 +327,12 @@ static int __tcp_client_on_read_decrypt(void *parm, __const__ char type, __const
     {
         if(as_data->proc == 0)
         {
-            if(parse_asp_address(buf, len, (struct sockaddr*) &addr, addr_str) != len)
+            as_data->buf_len = len;
+            int addr_len = __parse_asp_address((as_socket_t *) clnt, buf, len, addr_str, __tcp_client_dns_resolved);
+            if(addr_len < 0)
                 return 1;
             LOG_INFO("%s tcp connect to %s\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), addr_str);
-            as_tcp_t *remote = as_tcp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
-            as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
-            return as_tcp_connect(remote, (struct sockaddr*) &addr, __tcp_remote_on_connected);
+            return 0;
         }
         else
         {
@@ -310,23 +446,25 @@ static int __udp_client_on_read_decrypt(void *parm, __const__ char type, __const
 {
     char addr_str[256];
     as_udp_t *clnt = (as_udp_t *) parm;
+    __as_data_t *as_data = (__as_data_t *) as_socket_data((as_socket_t *) clnt);
     int addr_len;
-    struct sockaddr_storage addr;
     if(status != 0)
         return 1;
     if(type == 0x21)
     {
-        addr_len = parse_asp_address(buf, len, (struct sockaddr*) &addr, addr_str);
-        if(addr_len == -1 || addr_len >= len)
+        as_data->buf = (unsigned char *) malloc(len);
+        if(as_data->buf == NULL)
+        {
+            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+            abort();
+        }
+        as_data->buf_len = len;
+        addr_len = __parse_asp_address((as_socket_t *) clnt, buf, len, addr_str, __udp_client_dns_resolved);
+        if(addr_len == -1)
+            free(as_data->buf);
+        if(addr_len < 0)
             return 1;
         LOG_INFO("%s udp send to %s\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), addr_str);
-        as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
-        as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
-        if(as_udp_connect(remote, (struct sockaddr*) &addr) != 0)
-            return 1;
-        if(as_udp_read_start(remote, __udp_remote_on_read, AS_READ_ONESHOT) != 0)
-            return 1;
-        as_udp_write(remote, buf + addr_len, len - addr_len, NULL);
         return 0;
     }
     else

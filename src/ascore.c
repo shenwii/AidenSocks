@@ -220,14 +220,14 @@ void __dns_rspn_filter(dns_data_t *dns_data)
         {
             struct sockaddr_in *in_addr = (struct sockaddr_in *) &addr;
             in_addr->sin_family = AF_INET;
-            in_addr->sin_port = htons(53);
+            in_addr->sin_port = htons(0);
             memcpy(&in_addr->sin_addr, presrc->data, 4);
         }
         else
         {
             struct sockaddr_in6 *in_addr6 = (struct sockaddr_in6 *) &addr;
-            in_addr6->sin6_family = AF_INET;
-            in_addr6->sin6_port = htons(53);
+            in_addr6->sin6_family = AF_INET6;
+            in_addr6->sin6_port = htons(0);
             memcpy(&in_addr6->sin6_addr, presrc->data, 16);
         }
         rtn = dns_data->dns_cb(dns_data->target, 0, (struct sockaddr *) &addr);
@@ -1476,6 +1476,7 @@ int as_udp_write(as_udp_t *udp, __const__ unsigned char *buf, __const__ size_t l
 int as_resolver(as_socket_t *sck, __const__ char *host, as_resolved_f cb)
 {
     dns_hdr_flag_t dns_hdr_flag;
+    uint16_t type[2] = {0x01, 0x1C};
     memset(&dns_hdr_flag, 0, sizeof(dns_hdr_flag_t));
     int cnt = 2;
     struct sockaddr_storage addr;
@@ -1521,7 +1522,7 @@ int as_resolver(as_socket_t *sck, __const__ char *host, as_resolved_f cb)
             LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
             abort();
         }
-        udp->dns_buf_len = dns_request_data(cnt + 1, &dns_hdr_flag, (char *) host, 1, 1, udp->dns_buf);
+        udp->dns_buf_len = dns_request_data(cnt + 1, &dns_hdr_flag, (char *) host, type[cnt], 1, udp->dns_buf);
         as_udp_write(udp, udp->dns_buf, udp->dns_buf_len, NULL);
         udp->dns_request_time = time(NULL);
         as_udp_read_start(udp, __udp_dns_read_callback, AS_READ_ONESHOT);
@@ -1569,6 +1570,15 @@ as_socket_t *as_socket_map(as_socket_t *sck)
 int as_fd(as_socket_t *sck)
 {
     return sck->fd;
+}
+
+int as_socket_type(as_socket_t *sck)
+{
+    if(sck->type == SOCKET_TYPE_TCP)
+        return AS_SOCKET_TYPE_TCP;
+    if(sck->type == SOCKET_TYPE_UDP || sck->type == SOCKET_TYPE_UDP_FAKE)
+        return AS_SOCKET_TYPE_UDP;
+    return -1;
 }
 
 int as_socket_error(as_socket_t *sck, char *serrno)

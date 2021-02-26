@@ -24,6 +24,9 @@
 
 #define AS_BUFFER_SIZE 409600
 
+#define AS_SOCKET_TYPE_TCP 0x01
+#define AS_SOCKET_TYPE_UDP 0x02
+
 typedef struct as_loop_s as_loop_t;
 typedef struct as_socket_s as_socket_t;
 typedef struct as_tcp_s as_tcp_t;
@@ -40,7 +43,7 @@ typedef int (*as_udp_accepted_f)(as_udp_t *, as_udp_t *, void **, as_socket_dest
 typedef int (*as_udp_read_f)(as_udp_t *, __const__ struct msghdr *, __const__ unsigned char *, __const__ size_t);
 typedef int (*as_udp_wrote_f)(as_udp_t *, __const__ unsigned char *, __const__ size_t);
 
-typedef int (*as_resolved_f)(as_socket_t *, __const__ char, __const__ struct sockaddr* addr);
+typedef int (*as_resolved_f)(as_socket_t *, __const__ char, __const__ struct sockaddr *);
 
 as_loop_t *as_loop_init();
 
@@ -81,6 +84,8 @@ as_loop_t *as_socket_loop(as_socket_t *sck);
 as_socket_t *as_socket_map(as_socket_t *sck);
 
 int as_fd(as_socket_t *sck);
+
+int as_socket_type(as_socket_t *sck);
 
 int as_socket_error(as_socket_t *sck, char *serrno);
 
