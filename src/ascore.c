@@ -195,6 +195,8 @@ void __dns_rspn_filter(dns_data_t *dns_data)
     int rtn;
     if(dns_data->target->status & AS_STATUS_CLOSED)
     {
+        for(int i = 0; i < dns_data->dns_prtcl_cnt; i++)
+            dns_prtcl_free(&dns_data->dns_prtcl[i]);
         free(dns_data);
         return;
     }
@@ -239,6 +241,8 @@ void __dns_rspn_filter(dns_data_t *dns_data)
     dns_data->target->status &= ~AS_STATUS_RESOLVING;
     if(rtn != 0)
         as_close(dns_data->target);
+    for(int i = 0; i < dns_data->dns_prtcl_cnt; i++)
+        dns_prtcl_free(&dns_data->dns_prtcl[i]);
     free(dns_data);
 }
 
