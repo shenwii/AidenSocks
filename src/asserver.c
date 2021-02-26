@@ -191,7 +191,7 @@ static int __tcp_client_dns_resolved(as_socket_t *sck, __const__ char status, __
         {
             ((struct sockaddr_in6 *) addr)->sin6_port = as_data->port;
         }
-        return as_tcp_connect(remote, (struct sockaddr*) &addr, __tcp_remote_on_connected);
+        return as_tcp_connect(remote, (struct sockaddr*) addr, __tcp_remote_on_connected);
     }
     else
     {
@@ -232,7 +232,7 @@ static int __udp_client_dns_resolved(as_socket_t *sck, __const__ char status, __
         {
             ((struct sockaddr_in6 *) addr)->sin6_port = as_data->port;
         }
-        if(as_udp_connect(remote, (struct sockaddr*) &addr) != 0)
+        if(as_udp_connect(remote, (struct sockaddr*) addr) != 0)
         {
             free(as_data->buf);
             return 1;
