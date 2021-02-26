@@ -941,19 +941,25 @@ as_loop_t *as_loop_init()
     }
     while(1)
     {
-        if(statp._u._ext.nscount != 0)
+        // FIXME
+        // ipv6 dns server
+        // if(statp._u._ext.nscount != 0)
+        // {
+        //     memcpy(&loop->dns_server, statp._u._ext.nsaddrs[0], sizeof(struct sockaddr_in6));
+        //     break;
+        // }
+        for(int i =  0; i < statp.nscount; i++)
         {
-            memcpy(&loop->dns_server, statp._u._ext.nsaddrs[0], sizeof(struct sockaddr_in6));
-            break;
-        }
-        if(statp.nscount != 0)
-        {
-            memcpy(&loop->dns_server, &statp.nsaddr_list[0], sizeof(struct sockaddr_in));
-            break;
+            if(statp.nsaddr_list[i].sin_family == AF_INET)
+            {
+                memcpy(&loop->dns_server, &statp.nsaddr_list[0], sizeof(struct sockaddr_in));
+                break;
+            }
         }
         LOG_ERR(MSG_DNS_NAMESERVER_NOT_FOUND);
         abort();
     }
+    res_nclose(&statp);
 #else
     IP_ADAPTER_ADDRESSES *ad_address = NULL;
     IP_ADAPTER_ADDRESSES *cur_address = NULL;
