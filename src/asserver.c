@@ -243,6 +243,7 @@ static int __udp_client_dns_resolved(as_socket_t *sck, __const__ char status, __
             return 1;
         }
         as_udp_write(remote, as_data->buf + as_data->addr_len, as_data->buf_len - as_data->addr_len, NULL);
+        free(as_data->buf);
         return 0;
     }
     else
