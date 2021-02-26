@@ -950,7 +950,7 @@ as_loop_t *as_loop_init()
     {
         if(statp.nsaddr_list[i].sin_family == AF_INET)
         {
-            memcpy(&loop->dns_server, &statp.nsaddr_list[0], sizeof(struct sockaddr_in));
+            memcpy(&loop->dns_server, &statp.nsaddr_list[i], sizeof(struct sockaddr_in));
             res_nclose(&statp);
             return loop;
         }
