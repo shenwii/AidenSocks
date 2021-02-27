@@ -12,9 +12,11 @@
 
 unsigned char aes_key[AES_KEY_LEN / 8];
 
+conf_t conf;
+
 struct sockaddr_storage server_addr;
 
-conf_t conf;
+struct sockaddr_storage dns_server_addr;
 
 static int __destroy(as_socket_t *sck);
 
@@ -73,6 +75,16 @@ int main(int argc, char **argv)
     {
         LOG_ERR(MSG_BASE64_DECODE, conf.key);
         return 1;
+    }
+    if(getfirsthostbyname(conf.dns_server, (struct sockaddr *) &dns_server_addr) != 0)
+        return 1;
+    if(dns_server_addr.ss_family == AF_INET)
+    {
+        ((struct sockaddr_in *) &dns_server_addr)->sin_port = htons(conf.dns_port);
+    }
+    else
+    {
+        ((struct sockaddr_in6 *) &dns_server_addr)->sin6_port = htons(conf.dns_port);
     }
     loop = as_loop_init();
     if(getipv6hostbyname(conf.baddr6, &addr6) != 0)
@@ -205,22 +217,34 @@ static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
     if(status != 0)
         return 1;
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
-    LOG_INFO("%s tcp connect to %s:%d\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), conf.dns_server, conf.dns_port);
-    unsigned char hl = strlen(conf.dns_server);
-    unsigned char buf[hl + 4];
-    uint16_t pp = htons(conf.dns_port);
-    buf[0] = 0x03;
-    buf[1] = hl;
-    memcpy(buf + 2, conf.dns_server, hl);
-    memcpy(buf + hl + 2, (char *) &pp, 2);
-    unsigned char *sdata = malloc(ASP_MAX_DATA_LENGTH(hl + 4));
+    unsigned char buf[19];
+    size_t len;
+    if(dns_server_addr.ss_family == AF_INET)
+    {
+        LOG_INFO("%s tcp connect to %s:%d\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), conf.dns_server, conf.dns_port);
+        struct sockaddr_in *addr = (struct sockaddr_in *) &dns_server_addr;
+        buf[0] = 0x01;
+        memcpy(buf + 1, &addr->sin_addr, 4);
+        memcpy(buf + 5, &addr->sin_port, 2);
+        len = 7;
+    }
+    else
+    {
+        LOG_INFO("%s tcp connect to [%s]:%d\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), conf.dns_server, conf.dns_port);
+        struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *) &dns_server_addr;
+        buf[0] = 0x04;
+        memcpy(buf + 1, &addr6->sin6_addr, 16);
+        memcpy(buf + 17, &addr6->sin6_port, 2);
+        len = 19;
+    }
+    unsigned char *sdata = malloc(ASP_MAX_DATA_LENGTH(len));
     size_t dlen;
     if(sdata == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    asp_encrypt(0x01, 0, buf, hl + 4, aes_key, sdata, &dlen);
+    asp_encrypt(0x01, 0, buf, len, aes_key, sdata, &dlen);
     as_tcp_write(remote, sdata, dlen, NULL);
     free(sdata);
     return as_tcp_read_start(remote, __tcp_remote_on_read, AS_READ_ONESHOT);
@@ -307,23 +331,36 @@ static int __udp_client_on_connect(as_udp_t *srv, as_udp_t *clnt, void **data, a
 static int __udp_client_on_read(as_udp_t *clnt, __const__ struct msghdr *msg, __const__ unsigned char *buf, __const__ size_t len)
 {
     as_udp_t *remote = (as_udp_t *) as_socket_map((as_socket_t *) clnt);
-    LOG_INFO("%s udp send to %s:%d\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), conf.dns_server, conf.dns_port);
-    unsigned char hl = strlen(conf.dns_server);
-    unsigned char sbuf[hl + 4 + len];
-    uint16_t pp = htons(conf.dns_port);
-    sbuf[0] = 0x03;
-    sbuf[1] = hl;
-    memcpy(sbuf + 2, conf.dns_server, hl);
-    memcpy(sbuf + hl + 2, (char *) &pp, 2);
-    memcpy(sbuf + hl + 4, buf, len);
-    unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(hl + 4 + len));
+    unsigned char tbuf[19 + len];
+    size_t tlen;
+    if(dns_server_addr.ss_family == AF_INET)
+    {
+        LOG_INFO("%s udp send to %s:%d\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), conf.dns_server, conf.dns_port);
+        struct sockaddr_in *addr = (struct sockaddr_in *) &dns_server_addr;
+        tbuf[0] = 0x01;
+        memcpy(tbuf + 1, &addr->sin_addr, 4);
+        memcpy(tbuf + 5, &addr->sin_port, 2);
+        tlen = 7;
+    }
+    else
+    {
+        LOG_INFO("%s udp send to [%s]:%d\n", address_str((struct sockaddr *) as_dest_addr((as_socket_t *) clnt)), conf.dns_server, conf.dns_port);
+        struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *) &dns_server_addr;
+        tbuf[0] = 0x04;
+        memcpy(tbuf + 1, &addr6->sin6_addr, 16);
+        memcpy(tbuf + 17, &addr6->sin6_port, 2);
+        tlen = 19;
+    }
+    memcpy(&tbuf[tlen], buf, len);
+    tlen += len;
+    unsigned char *data = malloc(ASP_MAX_DATA_LENGTH(tlen));
     size_t dlen;
     if(data == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    asp_encrypt(0x21, 0, (unsigned char *) sbuf, hl + 4 + len, aes_key, (unsigned char *) data, &dlen);
+    asp_encrypt(0x21, 0, (unsigned char *) tbuf, tlen, aes_key, (unsigned char *) data, &dlen);
     as_udp_write(remote, data, dlen, NULL);
     free(data);
     return as_udp_read_start(remote, __udp_remote_on_read, AS_READ_ONESHOT);
