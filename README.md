@@ -18,7 +18,6 @@ AidenSocks is a lightweight secured proxy, it's written by pure c.
     as-dns   : Local dns server.
 
 ## Dependencies
-* linux(epoll)
 * libiniparser
 * openssl
 
