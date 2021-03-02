@@ -41,19 +41,19 @@ typedef struct
 
 typedef struct
 {
-    char *query;
+    char query[255];
     uint16_t type;
     uint16_t class;
 } dns_qstn_t;
 
 typedef struct
 {
-    char *query;
+    char query[255];
     uint16_t type;
     uint16_t class;
     uint32_t ttl;
     uint16_t data_len;
-    unsigned char *data;
+    unsigned char data[255];
 } dns_resr_t;
 
 typedef struct

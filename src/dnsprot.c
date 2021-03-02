@@ -49,55 +49,21 @@ int __dns_query_parse(__const__ unsigned char *data, __const__ size_t len, int *
     return 0;
 }
 
-void __parse_question_free(uint16_t cnt, dns_qstn_t *question_list)
-{
-    for(int i = 0; i < cnt; i++)
-    {
-        dns_qstn_t *question = question_list + i;
-        free(question->query);
-    }
-}
-
 int __parse_question(__const__ unsigned char *data, __const__ size_t len, int *pos, uint16_t cnt, dns_qstn_t *question_list)
 {
     unsigned char *p;
     for(int i = 0; i < cnt; i++)
     {
         dns_qstn_t *question = question_list + i;
-        question->query = malloc(DNS_HOST_MAX_LENGTH);
-        if(question->query == NULL)
-        {
-            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-            abort();
-        }
         if(__dns_query_parse(data, len, pos, question->query) != 0)
-        {
-            __parse_question_free(i - 1, question_list);
-            free(question->query);
             return 1;
-        }
         p = (unsigned char *) &data[*pos];
-        if(*pos + 4 > len)
-        {
-            __parse_question_free(i - 1, question_list);
-            free(question->query);
             return 1;
-        }
         question->type = ntohs(*((uint16_t *) p));
         question->class = ntohs(*((uint16_t *) (p + 2)));
         *pos += 4;
     }
     return 0;
-}
-
-void __parse_resource_free(uint16_t cnt, dns_resr_t *resource_list)
-{
-    for(int i = 0; i < cnt; i++)
-    {
-        dns_resr_t *resource = resource_list + i;
-        free(resource->query);
-        free(resource->data);
-    }
 }
 
 int __parse_resource(__const__ unsigned char *data, __const__ size_t len, int *pos, uint16_t cnt, dns_resr_t *resource_list)
@@ -106,102 +72,37 @@ int __parse_resource(__const__ unsigned char *data, __const__ size_t len, int *p
     for(int i = 0; i < cnt; i++)
     {
         dns_resr_t *resource = resource_list + i;
-        resource->query = malloc(DNS_HOST_MAX_LENGTH);
-        if(resource->query == NULL)
-        {
-            LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-            abort();
-        }
         if(__dns_query_parse(data, len, pos, resource->query) != 0)
-        {
-            __parse_resource_free(i - 1, resource_list);
-            free(resource->query);
             return 1;
-        }
         p = (unsigned char *) &data[*pos];
         if(*pos + 8 > len)
-        {
-            __parse_resource_free(i - 1, resource_list);
-            free(resource->query);
             return 1;
-        }
         resource->type = ntohs(*((uint16_t *) p));
         resource->class = ntohs(*((uint16_t *) (p + 2)));
         resource->ttl = ntohl(*((uint32_t *) (p + 4)));
         *pos += 8;
         p = (unsigned char *) &data[*pos];
         if(*pos + 2 > len)
-        {
-            __parse_resource_free(i - 1, resource_list);
-            free(resource->query);
             return 1;
-        }
         resource->data_len = ntohs(*((uint16_t *) p));
         if(*pos + 2 + resource->data_len > len)
-        {
-            __parse_resource_free(i - 1, resource_list);
-            free(resource->query);
             return 1;
-        }
         switch(resource->type)
         {
         case 2:
         case 5:
-        case 6:
-            resource->data = malloc(DNS_HOST_MAX_LENGTH);
-            if(resource->data == NULL)
-            {
-                LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-                abort();
-            }
+        {
             int tpos = *pos + 2;
             if(__dns_query_parse(data, len, &tpos, (char *) resource->data) != 0)
-            {
-                __parse_resource_free(i - 1, resource_list);
-                free(resource->query);
-                free(resource->data);
                 return 1;
-            }
+        }
             break;
         default:
-            resource->data = malloc(resource->data_len);
-            if(resource->data == NULL)
-            {
-                LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-                abort();
-            }
             memcpy(resource->data, p + 2, resource->data_len);
             break;
         }
         *pos += 2 + resource->data_len;
     }
-    return 0;
-}
-
-int __free_question(uint16_t cnt, dns_qstn_t *question_list)
-{
-    if(cnt == 0)
-        return 0;
-    for(int i = 0; i < cnt; i++)
-    {
-        dns_qstn_t *question = question_list + i;
-        free(question->query);
-    }
-    free(question_list);
-    return 0;
-}
-
-int __free_resource(uint16_t cnt, dns_resr_t *resource_list)
-{
-    if(cnt == 0)
-        return 0;
-    for(int i = 0; i < cnt; i++)
-    {
-        dns_resr_t *resource = resource_list + i;
-        free(resource->query);
-        free(resource->data);
-    }
-    free(resource_list);
     return 0;
 }
 
@@ -292,8 +193,11 @@ int dns_response_parse(__const__ unsigned char *data, __const__ size_t len, dns_
         }
         if(__parse_resource(data, len, &pos, dns_prtcl->header.an_count, dns_prtcl->answer) != 0)
         {
-            __free_question(dns_prtcl->header.qd_count, dns_prtcl->question);
-            dns_prtcl->header.qd_count = 0;
+            if(dns_prtcl->header.qd_count != 0)
+            {
+                free(dns_prtcl->question);
+                dns_prtcl->header.qd_count = 0;
+            }
             free(dns_prtcl->answer);
             dns_prtcl->header.an_count = 0;
             return 1;
@@ -314,10 +218,16 @@ int dns_response_parse(__const__ unsigned char *data, __const__ size_t len, dns_
         }
         if(__parse_resource(data, len, &pos, dns_prtcl->header.ns_count, dns_prtcl->authority) != 0)
         {
-            __free_question(dns_prtcl->header.qd_count, dns_prtcl->question);
-            dns_prtcl->header.qd_count = 0;
-            __free_resource(dns_prtcl->header.an_count, dns_prtcl->answer);
-            dns_prtcl->header.an_count = 0;
+            if(dns_prtcl->header.qd_count != 0)
+            {
+                free(dns_prtcl->question);
+                dns_prtcl->header.qd_count = 0;
+            }
+            if(dns_prtcl->header.an_count != 0)
+            {
+                free(dns_prtcl->answer);
+                dns_prtcl->header.an_count = 0;
+            }
             free(dns_prtcl->authority);
             dns_prtcl->header.ns_count = 0;
             return 1;
@@ -337,12 +247,21 @@ int dns_response_parse(__const__ unsigned char *data, __const__ size_t len, dns_
         }
         if(__parse_resource(data, len, &pos, dns_prtcl->header.ar_count, dns_prtcl->additional) != 0)
         {
-            __free_question(dns_prtcl->header.qd_count, dns_prtcl->question);
-            dns_prtcl->header.qd_count = 0;
-            __free_resource(dns_prtcl->header.an_count, dns_prtcl->answer);
-            dns_prtcl->header.an_count = 0;
-            __free_resource(dns_prtcl->header.ns_count, dns_prtcl->authority);
-            dns_prtcl->header.ns_count = 0;
+            if(dns_prtcl->header.qd_count != 0)
+            {
+                free(dns_prtcl->question);
+                dns_prtcl->header.qd_count = 0;
+            }
+            if(dns_prtcl->header.an_count != 0)
+            {
+                free(dns_prtcl->answer);
+                dns_prtcl->header.an_count = 0;
+            }
+            if(dns_prtcl->header.ns_count != 0)
+            {
+                free(dns_prtcl->authority);
+                dns_prtcl->header.ns_count = 0;
+            }
             free(dns_prtcl->additional);
             dns_prtcl->header.ar_count = 0;
             return 1;
@@ -353,13 +272,25 @@ int dns_response_parse(__const__ unsigned char *data, __const__ size_t len, dns_
 
 int dns_prtcl_free(dns_prtcl_t *dns_prtcl)
 {
-    __free_question(dns_prtcl->header.qd_count, dns_prtcl->question);
-    dns_prtcl->header.qd_count = 0;
-    __free_resource(dns_prtcl->header.an_count, dns_prtcl->answer);
-    dns_prtcl->header.an_count = 0;
-    __free_resource(dns_prtcl->header.ns_count, dns_prtcl->authority);
-    dns_prtcl->header.ns_count = 0;
-    __free_resource(dns_prtcl->header.ar_count, dns_prtcl->additional);
-    dns_prtcl->header.ar_count = 0;
+    if(dns_prtcl->header.qd_count != 0)
+    {
+        free(dns_prtcl->question);
+        dns_prtcl->header.qd_count = 0;
+    }
+    if(dns_prtcl->header.an_count != 0)
+    {
+        free(dns_prtcl->answer);
+        dns_prtcl->header.an_count = 0;
+    }
+    if(dns_prtcl->header.ns_count != 0)
+    {
+        free(dns_prtcl->authority);
+        dns_prtcl->header.ns_count = 0;
+    }
+    if(dns_prtcl->header.ar_count != 0)
+    {
+        free(dns_prtcl->additional);
+        dns_prtcl->header.ar_count = 0;
+    }
     return 0;
 }
