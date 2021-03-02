@@ -943,13 +943,15 @@ as_loop_t *as_loop_init()
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    // FIXME
-    // ipv6 dns server
-    // if(statp._u._ext.nscount != 0)
-    // {
-    //     memcpy(&loop->dns_server, statp._u._ext.nsaddrs[0], sizeof(struct sockaddr_in6));
-    //     break;
-    // }
+    for(int i =  0; i < MAXNS && statp._u._ext.nsaddrs[i] != NULL; i++)
+    {
+        if(statp._u._ext.nsaddrs[i]->sin6_family == AF_INET6)
+        {
+            memcpy(&loop->dns_server, statp._u._ext.nsaddrs[i], sizeof(struct sockaddr_in6));
+            res_nclose(&statp);
+            return loop;
+        }
+    }
     for(int i =  0; i < statp.nscount; i++)
     {
         if(statp.nsaddr_list[i].sin_family == AF_INET)
