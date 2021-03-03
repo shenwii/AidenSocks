@@ -58,6 +58,7 @@ int __parse_question(__const__ unsigned char *data, __const__ size_t len, int *p
         if(__dns_query_parse(data, len, pos, question->query) != 0)
             return 1;
         p = (unsigned char *) &data[*pos];
+        if(*pos + 4 > len)
             return 1;
         question->type = ntohs(*((uint16_t *) p));
         question->class = ntohs(*((uint16_t *) (p + 2)));
