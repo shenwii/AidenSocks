@@ -137,6 +137,7 @@ typedef struct
     size_t dns_recved_cnt;
     size_t dns_prtcl_cnt;
     dns_prtcl_t dns_prtcl[2];
+    char *host;
 } dns_data_t;
 
 static int __set_timeout(int fd)
@@ -243,6 +244,7 @@ void __dns_rspn_filter(dns_data_t *dns_data)
         as_close(dns_data->target);
     for(int i = 0; i < dns_data->dns_prtcl_cnt; i++)
         dns_prtcl_free(&dns_data->dns_prtcl[i]);
+    free(dns_data->host);
     free(dns_data);
 }
 
@@ -854,7 +856,23 @@ int __udp_dns_read_callback(as_udp_t *udp, __const__ struct msghdr *msg, __const
     dns_data_t *dns_data = (dns_data_t *) udp->sck.data;
     dns_data->dns_recved_cnt++;
     if(dns_response_parse(buf, len, &dns_data->dns_prtcl[dns_data->dns_prtcl_cnt]) == 0)
+    {
         dns_data->dns_prtcl_cnt++;
+    }
+    else
+    {
+        char str[80];
+        if(udp->sck.loop->dns_server.ss_family == AF_INET)
+        {
+            inet_ntop(udp->sck.loop->dns_server.ss_family, &((struct sockaddr_in *) &udp->sck.loop->dns_server)->sin_addr, str, 80);
+            LOG_ERR(MSG_RESOLV_BUG, dns_data->host, str, ntohs(((struct sockaddr_in *) &udp->sck.loop->dns_server)->sin_port));
+        }
+        else
+        {
+            inet_ntop(udp->sck.loop->dns_server.ss_family, &((struct sockaddr_in6 *) &udp->sck.loop->dns_server)->sin6_addr, str, 80);
+            LOG_ERR(MSG_RESOLV_BUG, dns_data->host, str, ntohs(((struct sockaddr_in6 *) &udp->sck.loop->dns_server)->sin6_port));
+        }
+    }
     if(dns_data->dns_recved_cnt == 2)
         __dns_rspn_filter(dns_data);
     as_close((as_socket_t *) udp);
@@ -1492,7 +1510,8 @@ int as_resolver(as_socket_t *sck, __const__ char *host, as_resolved_f cb)
     struct sockaddr_in6 *in_addr6 = (struct sockaddr_in6 *) &addr;
     struct sockaddr_in *in_addr = (struct sockaddr_in *) &addr;
     int rtn;
-    if(strlen(host) > 255)
+    size_t host_len = strlen(host);
+    if(host_len > 255)
         return 1;
     rtn = inet_pton(AF_INET6, host, &in_addr6->sin6_addr);
     if(rtn == 1)
@@ -1514,6 +1533,13 @@ int as_resolver(as_socket_t *sck, __const__ char *host, as_resolved_f cb)
         abort();
     }
     memset(dns_data, 0, sizeof(dns_data_t));
+    dns_data->host = malloc(sizeof(host_len + 1));
+    if(dns_data->host == NULL)
+    {
+        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
+        abort();
+    }
+    memcpy(dns_data->host, host, host_len + 1);
     dns_data->dns_cb = cb;
     dns_data->target = sck;
     while(cnt--)
