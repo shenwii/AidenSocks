@@ -774,7 +774,7 @@ void __udp_fake_on_write(as_udp_t *udp)
             case EINTR:
                 continue;
             default:
-                as_close((as_socket_t *) udp);
+                as_close((as_socket_t *) buf->udp);
                 udp->sck.write_queue.header = buf->next;
                 free(buf->data);
                 free(buf);
