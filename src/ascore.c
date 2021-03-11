@@ -305,6 +305,15 @@ static void __socket_loop_event(as_loop_t *loop)
                     LOG_DEBUG("%d is closed\n", s->fd);
                 }
             }
+            else
+            {
+                as_udp_t *fake_udp = (as_udp_t *) s;
+                as_udp_t *udp = fake_udp->udp_server;
+                for(as_buffer_t *asbuf = udp->sck.write_queue.header; asbuf != NULL; asbuf = asbuf->next)
+                {
+                    asbuf->udp = NULL;
+                }
+            }
             if(s->type == SOCKET_TYPE_UDP_DNS)
             {
                 as_udp_t *udp = (as_udp_t *) s;
@@ -735,9 +744,22 @@ void __udp_fake_on_write(as_udp_t *udp)
             udp->sck.write_queue.header = buf->next;
             free(buf->data);
             free(buf);
-            buf = udp->sck.write_queue.header;
         }
     }
+    buf = udp->sck.write_queue.header;
+    while(buf != NULL)
+    {
+        if(buf->udp == NULL)
+        {
+            free(buf->data);
+            void *p = buf;
+            buf = buf->next;
+            if(udp->sck.write_queue.header == p)
+                udp->sck.write_queue.header = buf;
+            free(p);
+        }
+    }
+    buf = udp->sck.write_queue.header;
     if(buf == NULL)
     {
 #ifdef __linux__
