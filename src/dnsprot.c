@@ -17,9 +17,9 @@ int __dns_query_parse(__const__ unsigned char *data, __const__ size_t len, int *
         return 1;
     if(*pdata == 0)
     {
-        if(*pos + 2 > len)
+        if(*pos + 1 > len)
             return 1;
-        *pos += 2;
+        *pos += 1;
         return 0;
     }
     while((strl = *pdata) != 0)
@@ -86,21 +86,24 @@ int __parse_resource(__const__ unsigned char *data, __const__ size_t len, int *p
         if(*pos + 2 > len)
             return 1;
         resource->data_len = ntohs(*((uint16_t *) p));
-        if(*pos + 2 + resource->data_len > len)
-            return 1;
-        switch(resource->type)
+        if(resource->data_len != 0)
         {
-        case 2:
-        case 5:
-        {
-            int tpos = *pos + 2;
-            if(__dns_query_parse(data, len, &tpos, (char *) resource->data) != 0)
+            if(*pos + 2 + resource->data_len > len)
                 return 1;
-        }
-            break;
-        default:
-            memcpy(resource->data, p + 2, resource->data_len);
-            break;
+            switch(resource->type)
+            {
+            case 2:
+            case 5:
+            {
+                int tpos = *pos + 2;
+                if(__dns_query_parse(data, len, &tpos, (char *) resource->data) != 0)
+                    return 1;
+            }
+                break;
+            default:
+                memcpy(resource->data, p + 2, resource->data_len);
+                break;
+            }
         }
         *pos += 2 + resource->data_len;
     }
