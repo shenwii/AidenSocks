@@ -757,7 +757,9 @@ void __udp_fake_on_write(as_udp_t *udp)
             if(udp->sck.write_queue.header == p)
                 udp->sck.write_queue.header = buf;
             free(p);
+            continue;
         }
+        buf = buf->next;
     }
     buf = udp->sck.write_queue.header;
     if(buf == NULL)
