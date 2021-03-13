@@ -1557,7 +1557,7 @@ int as_resolver(as_socket_t *sck, __const__ char *host, as_resolved_f cb)
         abort();
     }
     memset(dns_data, 0, sizeof(dns_data_t));
-    dns_data->host = malloc(sizeof(host_len + 1));
+    dns_data->host = malloc(host_len + 1);
     if(dns_data->host == NULL)
     {
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
