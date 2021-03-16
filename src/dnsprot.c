@@ -9,7 +9,7 @@
 #include <arpa/inet.h>
 #endif
 
-int __dns_query_parse(__const__ unsigned char *data, __const__ size_t len, int *pos, char *str)
+int __dns_query_parse(__const__ unsigned char *data, __const__ size_t len, int *pos, char *str, size_t str_len)
 {
     unsigned char *pdata = (unsigned char *) &data[*pos];
     unsigned char strl;
@@ -28,8 +28,8 @@ int __dns_query_parse(__const__ unsigned char *data, __const__ size_t len, int *
         {
             if(*pos + 2 > len)
                 return 1;
-            int tpos = *(pdata + 1);
-            if(__dns_query_parse(data, len, &tpos, str) != 0)
+            int tpos = ((*pdata & 0x3f) << 8) | *(pdata + 1);
+            if(__dns_query_parse(data, len, &tpos, str, str_len) != 0)
                 return 1;
             pdata += 2;
             *pos += 2;
@@ -37,11 +37,14 @@ int __dns_query_parse(__const__ unsigned char *data, __const__ size_t len, int *
         }
         else
         {
+            if(str_len + strl + 1 > 255)
+                return 2;
             memcpy(str, pdata + 1, strl);
             str += strl;
             *str++ = '.';
             pdata += strl + 1;
             *pos += strl + 1;
+            str_len += strl + 1;
         }
     }
     *(str - 1) = '\0';
@@ -55,7 +58,7 @@ int __parse_question(__const__ unsigned char *data, __const__ size_t len, int *p
     for(int i = 0; i < cnt; i++)
     {
         dns_qstn_t *question = question_list + i;
-        if(__dns_query_parse(data, len, pos, question->query) != 0)
+        if(__dns_query_parse(data, len, pos, question->query, 0) != 0)
             return 1;
         p = (unsigned char *) &data[*pos];
         if(*pos + 4 > len)
@@ -73,7 +76,7 @@ int __parse_resource(__const__ unsigned char *data, __const__ size_t len, int *p
     for(int i = 0; i < cnt; i++)
     {
         dns_resr_t *resource = resource_list + i;
-        if(__dns_query_parse(data, len, pos, resource->query) != 0)
+        if(__dns_query_parse(data, len, pos, resource->query, 0) != 0)
             return 1;
         p = (unsigned char *) &data[*pos];
         if(*pos + 8 > len)
@@ -96,11 +99,13 @@ int __parse_resource(__const__ unsigned char *data, __const__ size_t len, int *p
             case 5:
             {
                 int tpos = *pos + 2;
-                if(__dns_query_parse(data, len, &tpos, (char *) resource->data) != 0)
+                if(__dns_query_parse(data, len, &tpos, (char *) resource->data, 0) != 0)
                     return 1;
             }
                 break;
             default:
+                if(resource->data_len > 255)
+                    return 2;
                 memcpy(resource->data, p + 2, resource->data_len);
                 break;
             }
