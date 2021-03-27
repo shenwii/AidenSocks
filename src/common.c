@@ -24,6 +24,16 @@ static struct addrinfo *__gethostbyname(__const__ char *hostname)
 
 int getfirsthostbyname(__const__ char *hostname, struct sockaddr* addr)
 {
+    if(inet_pton(AF_INET6, hostname, &((struct sockaddr_in6 *) addr)->sin6_addr) == 1)
+    {
+        ((struct sockaddr_in6 *) addr)->sin6_family = AF_INET6;
+        return 0;
+    }
+    if(inet_pton(AF_INET, hostname, &((struct sockaddr_in *) addr)->sin_addr) == 1)
+    {
+        ((struct sockaddr_in *) addr)->sin_family = AF_INET;
+        return 0;
+    }
     struct addrinfo *result = __gethostbyname(hostname);
     if(result == NULL)
         return 1;
@@ -42,6 +52,11 @@ int getfirsthostbyname(__const__ char *hostname, struct sockaddr* addr)
 int getipv4hostbyname(__const__ char *hostname, struct sockaddr_in *addr)
 {
     struct addrinfo *p = NULL;
+    if(inet_pton(AF_INET, hostname, &((struct sockaddr_in *) addr)->sin_addr) == 1)
+    {
+        ((struct sockaddr_in *) addr)->sin_family = AF_INET;
+        return 0;
+    }
     struct addrinfo *result = __gethostbyname(hostname);
     if(result == NULL)
         return 1;
@@ -61,6 +76,11 @@ int getipv4hostbyname(__const__ char *hostname, struct sockaddr_in *addr)
 int getipv6hostbyname(__const__ char *hostname, struct sockaddr_in6 *addr)
 {
     struct addrinfo *p = NULL;
+    if(inet_pton(AF_INET6, hostname, &((struct sockaddr_in6 *) addr)->sin6_addr) == 1)
+    {
+        ((struct sockaddr_in6 *) addr)->sin6_family = AF_INET6;
+        return 0;
+    }
     struct addrinfo *result = __gethostbyname(hostname);
     if(result == NULL)
         return 1;
