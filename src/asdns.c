@@ -14,7 +14,9 @@ unsigned char aes_key[AES_KEY_LEN / 8];
 
 conf_t conf;
 
-struct sockaddr_storage server_addr;
+struct sockaddr_storage tcp_server_addr;
+
+struct sockaddr_storage udp_server_addr;
 
 struct sockaddr_storage dns_server_addr;
 
@@ -100,31 +102,32 @@ int main(int argc, char **argv)
     }
     addr.sin_port = htons(conf.bport);
 
+    if(getfirsthostbyname(conf.server, (struct sockaddr*) &udp_server_addr) != 0)
+        return 1;
+    if(udp_server_addr.ss_family == AF_INET)
+    {
+        ((struct sockaddr_in *) &udp_server_addr)->sin_port = htons(conf.port);
+    }
+    else
+    {
+        ((struct sockaddr_in6 *) &udp_server_addr)->sin6_port = htons(conf.port);
+    }
     if(strcmp(conf.tcp_proxy_server, CONF_EMPTY_STRING) != 0)
     {
-        if(getfirsthostbyname(conf.tcp_proxy_server, (struct sockaddr*) &server_addr) != 0)
+        if(getfirsthostbyname(conf.tcp_proxy_server, (struct sockaddr*) &tcp_server_addr) != 0)
             return 1;
-        if(server_addr.ss_family == AF_INET)
+        if(tcp_server_addr.ss_family == AF_INET)
         {
-            ((struct sockaddr_in *) &server_addr)->sin_port = htons(conf.tcp_proxy_port);
+            ((struct sockaddr_in *) &tcp_server_addr)->sin_port = htons(conf.tcp_proxy_port);
         }
         else
         {
-            ((struct sockaddr_in6 *) &server_addr)->sin6_port = htons(conf.tcp_proxy_port);
+            ((struct sockaddr_in6 *) &tcp_server_addr)->sin6_port = htons(conf.tcp_proxy_port);
         }
     }
     else
     {
-        if(getfirsthostbyname(conf.server, (struct sockaddr*) &server_addr) != 0)
-            return 1;
-        if(server_addr.ss_family == AF_INET)
-        {
-            ((struct sockaddr_in *) &server_addr)->sin_port = htons(conf.port);
-        }
-        else
-        {
-            ((struct sockaddr_in6 *) &server_addr)->sin6_port = htons(conf.port);
-        }
+        memcpy(&tcp_server_addr, &udp_server_addr, sizeof(struct sockaddr_storage));
     }
 
     //bind ipv6 udp address
@@ -207,7 +210,7 @@ static int __tcp_client_on_connect(as_tcp_t *srv, as_tcp_t *clnt, void **data, a
     }
     memset(*data, 0, sizeof(asp_buffer_t));
     *cb = __destroy;
-    if(as_tcp_connect(remote, (struct sockaddr*) &server_addr, __tcp_remote_on_connected) != 0)
+    if(as_tcp_connect(remote, (struct sockaddr*) &tcp_server_addr, __tcp_remote_on_connected) != 0)
         return 1;
     return 0;
 }
@@ -314,7 +317,7 @@ static int __tcp_client_on_wrote(as_tcp_t *clnt, __const__ unsigned char *buf, _
 static int __udp_client_on_connect(as_udp_t *srv, as_udp_t *clnt, void **data, as_socket_destroying_f *cb)
 {
     as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
-    if(as_udp_connect(remote, (struct sockaddr *) &server_addr) != 0)
+    if(as_udp_connect(remote, (struct sockaddr *) &udp_server_addr) != 0)
         return 1;
     as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
     *data = malloc(sizeof(asp_buffer_t));

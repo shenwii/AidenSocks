@@ -43,7 +43,9 @@ typedef struct
     size_t conn_buf_size;
 } __s5_buffer_t;
 
-struct sockaddr_storage server_addr;
+struct sockaddr_storage tcp_server_addr;
+
+struct sockaddr_storage udp_server_addr;
 
 static int __socks5_address_str(__const__ unsigned char *buf, __const__ size_t len, char *addr_str);
 
@@ -124,31 +126,32 @@ int main(int argc, char **argv)
     }
     addr.sin_port = htons(conf.bport);
 
+    if(getfirsthostbyname(conf.server, (struct sockaddr*) &udp_server_addr) != 0)
+        return 1;
+    if(udp_server_addr.ss_family == AF_INET)
+    {
+        ((struct sockaddr_in *) &udp_server_addr)->sin_port = htons(conf.port);
+    }
+    else
+    {
+        ((struct sockaddr_in6 *) &udp_server_addr)->sin6_port = htons(conf.port);
+    }
     if(strcmp(conf.tcp_proxy_server, CONF_EMPTY_STRING) != 0)
     {
-        if(getfirsthostbyname(conf.tcp_proxy_server, (struct sockaddr*) &server_addr) != 0)
+        if(getfirsthostbyname(conf.tcp_proxy_server, (struct sockaddr*) &tcp_server_addr) != 0)
             return 1;
-        if(server_addr.ss_family == AF_INET)
+        if(tcp_server_addr.ss_family == AF_INET)
         {
-            ((struct sockaddr_in *) &server_addr)->sin_port = htons(conf.tcp_proxy_port);
+            ((struct sockaddr_in *) &tcp_server_addr)->sin_port = htons(conf.tcp_proxy_port);
         }
         else
         {
-            ((struct sockaddr_in6 *) &server_addr)->sin6_port = htons(conf.tcp_proxy_port);
+            ((struct sockaddr_in6 *) &tcp_server_addr)->sin6_port = htons(conf.tcp_proxy_port);
         }
     }
     else
     {
-        if(getfirsthostbyname(conf.server, (struct sockaddr*) &server_addr) != 0)
-            return 1;
-        if(server_addr.ss_family == AF_INET)
-        {
-            ((struct sockaddr_in *) &server_addr)->sin_port = htons(conf.port);
-        }
-        else
-        {
-            ((struct sockaddr_in6 *) &server_addr)->sin6_port = htons(conf.port);
-        }
+        memcpy(&tcp_server_addr, &udp_server_addr, sizeof(struct sockaddr_storage));
     }
 
     //bind ipv6 tcp address
@@ -401,7 +404,7 @@ static int __s5_connect(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ 
     }
     memcpy(s5_buf->conn_buf, buf, len);
     s5_buf->conn_buf_size = len;
-    return as_tcp_connect(remote, (struct sockaddr*) &server_addr, __tcp_remote_on_connected);
+    return as_tcp_connect(remote, (struct sockaddr*) &tcp_server_addr, __tcp_remote_on_connected);
 }
 
 static int __s5_tcp_forward(as_tcp_t *clnt, __const__ unsigned char *buf, __const__ size_t len)
@@ -430,7 +433,7 @@ static int __s5_udp_forward(as_tcp_t *clnt, __const__ unsigned char *buf, __cons
     unsigned char *data = (unsigned char *) &buf[headerlen];
     size_t data_len = len - headerlen;
     as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
-    if(as_udp_connect(remote, (struct sockaddr *) &server_addr) != 0)
+    if(as_udp_connect(remote, (struct sockaddr *) &udp_server_addr) != 0)
         return 1;
     as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
     addr_len = __socks5_address_str(data - 1, data_len + 1, addr_str);
