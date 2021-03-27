@@ -20,9 +20,9 @@
 
 unsigned char aes_key[AES_KEY_LEN / 8];
 
-struct sockaddr_storage tcp_server_addr;
+struct sockaddr_storage tcp_server_addr = {0};
 
-struct sockaddr_storage udp_server_addr;
+struct sockaddr_storage udp_server_addr = {0};
 
 static int __redirect_destaddr(int fd, struct sockaddr_storage *destaddr);
 
@@ -67,8 +67,8 @@ int main(int argc, char **argv)
     as_loop_t *loop;
     as_tcp_t *tcp;
     as_udp_t *udp;
-    struct sockaddr_in6 addr6;
-    struct sockaddr_in addr;
+    struct sockaddr_in6 addr6 = {0};
+    struct sockaddr_in addr = {0};
     if(argc < 2)
         return __usage(argv[0]);
     if(conf_parse(&conf, argv[1], "Redire") != 0)

@@ -43,9 +43,9 @@ typedef struct
     size_t conn_buf_size;
 } __s5_buffer_t;
 
-struct sockaddr_storage tcp_server_addr;
+struct sockaddr_storage tcp_server_addr = {0};
 
-struct sockaddr_storage udp_server_addr;
+struct sockaddr_storage udp_server_addr = {0};
 
 static int __socks5_address_str(__const__ unsigned char *buf, __const__ size_t len, char *addr_str);
 
@@ -91,8 +91,8 @@ int main(int argc, char **argv)
     conf_t conf;
     as_loop_t *loop;
     as_tcp_t *tcp;
-    struct sockaddr_in6 addr6;
-    struct sockaddr_in addr;
+    struct sockaddr_in6 addr6 = {0};
+    struct sockaddr_in addr = {0};
     if(argc < 2)
         return __usage(argv[0]);
     if(conf_parse(&conf, argv[1], "Socks5") != 0)
