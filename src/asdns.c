@@ -78,6 +78,7 @@ int main(int argc, char **argv)
         LOG_ERR(MSG_BASE64_DECODE, conf.key);
         return 1;
     }
+    loop = as_loop_init();
     if(getfirsthostbyname(conf.dns_server, (struct sockaddr *) &dns_server_addr) != 0)
     {
         LOG_ERR(MSG_RESOLV_HOST, conf.dns_server);
@@ -91,7 +92,6 @@ int main(int argc, char **argv)
     {
         ((struct sockaddr_in6 *) &dns_server_addr)->sin6_port = htons(conf.dns_port);
     }
-    loop = as_loop_init();
     if(getipv6hostbyname(conf.baddr6, &addr6) != 0)
     {
         LOG_ERR(MSG_RESOLV_HOST, conf.baddr6);
