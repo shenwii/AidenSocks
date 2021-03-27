@@ -79,7 +79,10 @@ int main(int argc, char **argv)
         return 1;
     }
     if(getfirsthostbyname(conf.dns_server, (struct sockaddr *) &dns_server_addr) != 0)
+    {
+        LOG_ERR(MSG_RESOLV_HOST, conf.dns_server);
         return 1;
+    }
     if(dns_server_addr.ss_family == AF_INET)
     {
         ((struct sockaddr_in *) &dns_server_addr)->sin_port = htons(conf.dns_port);
@@ -103,7 +106,10 @@ int main(int argc, char **argv)
     addr.sin_port = htons(conf.bport);
 
     if(getfirsthostbyname(conf.server, (struct sockaddr*) &udp_server_addr) != 0)
+    {
+        LOG_ERR(MSG_RESOLV_HOST, conf.server);
         return 1;
+    }
     if(udp_server_addr.ss_family == AF_INET)
     {
         ((struct sockaddr_in *) &udp_server_addr)->sin_port = htons(conf.port);
@@ -115,7 +121,10 @@ int main(int argc, char **argv)
     if(strcmp(conf.tcp_proxy_server, CONF_EMPTY_STRING) != 0)
     {
         if(getfirsthostbyname(conf.tcp_proxy_server, (struct sockaddr*) &tcp_server_addr) != 0)
+        {
+            LOG_ERR(MSG_RESOLV_HOST, conf.tcp_proxy_server);
             return 1;
+        }
         if(tcp_server_addr.ss_family == AF_INET)
         {
             ((struct sockaddr_in *) &tcp_server_addr)->sin_port = htons(conf.tcp_proxy_port);
