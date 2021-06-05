@@ -746,19 +746,23 @@ void __udp_fake_on_write(as_udp_t *udp)
             free(buf);
         }
     }
+    as_buffer_t *pbuf;
     buf = udp->sck.write_queue.header;
     while(buf != NULL)
     {
         if(buf->udp == NULL)
         {
             free(buf->data);
-            void *p = buf;
+            void *cur = buf;
             buf = buf->next;
-            if(udp->sck.write_queue.header == p)
+            if(udp->sck.write_queue.header == cur)
                 udp->sck.write_queue.header = buf;
-            free(p);
+            else
+                pbuf->next = buf;
+            free(cur);
             continue;
         }
+        pbuf = buf;
         buf = buf->next;
     }
     buf = udp->sck.write_queue.header;
