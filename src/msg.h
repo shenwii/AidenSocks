@@ -17,5 +17,6 @@
 #define MSG_BUG "this is a bug, please report it, errno = %d\n"
 #define MSG_DNS_NAMESERVER_NOT_FOUND "dns nameserver not found\n"
 #define MSG_RESOLV_BUG "can't resolv %s on dns server %s:%d, this may be a bug\n"
+#define MSG_OPEN_FILE "open file(\"%s\") error\n"
 
 #endif

@@ -983,33 +983,8 @@ as_loop_t *as_loop_init()
         LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
         abort();
     }
-    struct __res_state statp;
-    if(res_ninit(&statp) < 0)
-    {
-        LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
-        abort();
-    }
-    for(int i =  0; i < MAXNS && statp._u._ext.nsaddrs[i] != NULL; i++)
-    {
-        if(statp._u._ext.nsaddrs[i]->sin6_family == AF_INET6)
-        {
-            memcpy(&loop->dns_server, statp._u._ext.nsaddrs[i], sizeof(struct sockaddr_in6));
-            res_nclose(&statp);
-            return loop;
-        }
-    }
-    for(int i =  0; i < statp.nscount; i++)
-    {
-        if(statp.nsaddr_list[i].sin_family == AF_INET)
-        {
-            memcpy(&loop->dns_server, &statp.nsaddr_list[i], sizeof(struct sockaddr_in));
-            res_nclose(&statp);
-            return loop;
-        }
-    }
-    LOG_ERR(MSG_DNS_NAMESERVER_NOT_FOUND);
-    abort();
-#else
+#endif
+#if defined _WIN32 || defined __CYGWIN__
     IP_ADAPTER_ADDRESSES *ad_address = NULL;
     IP_ADAPTER_ADDRESSES *cur_address = NULL;
     ULONG buffer_len = 16 * 1024 * 1024;
@@ -1044,6 +1019,115 @@ as_loop_t *as_loop_init()
                 continue;
             }
             return loop;
+        }
+    }
+    LOG_ERR(MSG_DNS_NAMESERVER_NOT_FOUND);
+    abort();
+#else
+    int c;
+    char is_comment = 0;
+    char key[80];
+    char value[80];
+    int ikey = 0;
+    int ivalue = 0;
+    int type = 0;
+    struct sockaddr_in6 *in_addr6 = (struct sockaddr_in6 *) &loop->dns_server;
+    struct sockaddr_in *in_addr = (struct sockaddr_in *) &loop->dns_server;
+    FILE *resolv_file = fopen(_PATH_RESCONF, "r");
+    if(resolv_file == NULL)
+    {
+        LOG_ERR(MSG_OPEN_FILE, _PATH_RESCONF);
+        abort();
+    }
+    while((c = fgetc(resolv_file)) != EOF)
+    {
+        switch (c)
+        {
+        case '\n':
+            key[ikey++] = '\0';
+            value[ivalue++] = '\0';
+            if(strcmp(key, "nameserver") == 0)
+            {
+                int rtn = inet_pton(AF_INET6, value, &in_addr6->sin6_addr);
+                if(rtn == 1)
+                {
+                    in_addr6->sin6_family = AF_INET6;
+                    in_addr6->sin6_port = htons(53);
+                    fclose(resolv_file);
+                    return loop;
+                }
+                rtn = inet_pton(AF_INET, value, &in_addr->sin_addr);
+                if(rtn == 1)
+                {
+                    in_addr->sin_family = AF_INET;
+                    in_addr->sin_port = htons(53);
+                    fclose(resolv_file);
+                    return loop;
+                }
+            }
+            ikey = 0;
+            ivalue = 0;
+            type = 0;
+            is_comment = 0;
+            break;
+        case '\r':
+        case ' ':
+        case '\t':
+        case '\f':
+        case '\v':
+            if(type == 1)
+            {
+                type = 2;
+            }
+            if(type == 3)
+            {
+                type = 4;
+            }
+            break;
+        case '#':
+            is_comment = 1;
+            break;
+        default:
+            if(is_comment)
+                continue;
+            if(type == 0 || type == 1)
+            {
+                if(ikey < 80 - 1)
+                    key[ikey++] = c;
+                type = 1;
+            }
+            if(type == 2 || type == 3)
+            {
+                if(ivalue < 80 - 1)
+                    value[ivalue++] = c;
+                type = 3;
+            }
+            break;
+        }
+    }
+    fclose(resolv_file);
+    if(type >= 3)
+    {
+        key[ikey++] = '\0';
+        value[ivalue++] = '\0';
+        if(strcmp(key, "nameserver") == 0)
+        {
+            int rtn = inet_pton(AF_INET6, value, &in_addr6->sin6_addr);
+            if(rtn == 1)
+            {
+                in_addr6->sin6_family = AF_INET6;
+                in_addr6->sin6_port = htons(53);
+                fclose(resolv_file);
+                return loop;
+            }
+            rtn = inet_pton(AF_INET, value, &in_addr->sin_addr);
+            if(rtn == 1)
+            {
+                in_addr->sin_family = AF_INET;
+                in_addr->sin_port = htons(53);
+                fclose(resolv_file);
+                return loop;
+            }
         }
     }
     LOG_ERR(MSG_DNS_NAMESERVER_NOT_FOUND);

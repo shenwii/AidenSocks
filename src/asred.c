@@ -24,9 +24,9 @@ struct sockaddr_storage tcp_server_addr = {0};
 
 struct sockaddr_storage udp_server_addr = {0};
 
-static int __redirect_destaddr(int fd, struct sockaddr_storage *destaddr);
+static int __redirect_tcp_destaddr(int fd, struct sockaddr_storage *destaddr);
 
-static int __tproxy_destaddr(struct msghdr *msg, struct sockaddr_storage *destaddr);
+static int __tproxy_udp_destaddr(struct msghdr *msg, struct sockaddr_storage *destaddr);
 
 static int __destroy(as_socket_t *sck);
 
@@ -137,7 +137,7 @@ int main(int argc, char **argv)
 
     //bind ipv6 tcp address
     tcp = as_tcp_init(loop, NULL, NULL);
-    if(as_tcp_bind(tcp, (struct sockaddr *) &addr6, AS_TCP_IPV6ONLY) != 0)
+    if(as_tcp_bind(tcp, (struct sockaddr *) &addr6, AS_TCP_IPV6ONLY | AS_TCP_TPROXY) != 0)
     {
         LOG_ERR(MSG_TCP_BIND, conf.baddr6, conf.bport);
         return 1;
@@ -151,7 +151,7 @@ int main(int argc, char **argv)
 
     //bind ipv4 tcp address
     tcp = as_tcp_init(loop, NULL, NULL);
-    if(as_tcp_bind(tcp, (struct sockaddr *) &addr, 0) != 0)
+    if(as_tcp_bind(tcp, (struct sockaddr *) &addr, AS_TCP_TPROXY) != 0)
     {
         LOG_ERR(MSG_TCP_BIND, conf.baddr, conf.bport);
         return 1;
@@ -161,6 +161,7 @@ int main(int argc, char **argv)
         LOG_ERR(MSG_TCP_LISTENED);
         return 1;
     }
+    LOG_INFO(MSG_TCP_LISTEN_ON, conf.baddr, conf.bport);
 
     //bind ipv6 udp address
     udp = as_udp_init(loop, NULL, NULL);
@@ -193,7 +194,7 @@ int main(int argc, char **argv)
     return 0;
 }
 
-static int __redirect_destaddr(int fd, struct sockaddr_storage *destaddr)
+static int __redirect_tcp_destaddr(int fd, struct sockaddr_storage *destaddr)
 {
     socklen_t len = sizeof(struct sockaddr_storage);
     int en = 0;
@@ -207,7 +208,7 @@ static int __redirect_destaddr(int fd, struct sockaddr_storage *destaddr)
     return getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, destaddr, &len);
 }
 
-static int __tproxy_destaddr(struct msghdr *msg, struct sockaddr_storage *destaddr)
+static int __tproxy_udp_destaddr(struct msghdr *msg, struct sockaddr_storage *destaddr)
 {
     struct cmsghdr *cmsg;
     while((cmsg = CMSG_FIRSTHDR(msg)))
@@ -260,7 +261,7 @@ static int __tcp_remote_on_connected(as_tcp_t *remote, char status)
     as_tcp_t *clnt = (as_tcp_t *) as_socket_map((as_socket_t *) remote);
     if(status != 0)
         return 1;
-    if(__redirect_destaddr(as_fd((as_socket_t *) clnt), &destaddr) != 0)
+    if(__redirect_tcp_destaddr(as_fd((as_socket_t *) clnt), &destaddr) != 0)
         return 1;
     LOG_INFO("tcp redirect to %s\n", address_str((struct sockaddr *) &destaddr));
     unsigned char buf[19];
@@ -376,7 +377,7 @@ static int __udp_client_on_read(as_udp_t *clnt, __const__ struct msghdr *msg, __
 {
     struct sockaddr_storage destaddr;
     as_udp_t *remote = (as_udp_t *) as_socket_map((as_socket_t *) clnt);
-    if(__tproxy_destaddr((struct msghdr *) msg, &destaddr) != 0)
+    if(__tproxy_udp_destaddr((struct msghdr *) msg, &destaddr) != 0)
         return 1;
     LOG_INFO("udp redirect to %s\n", address_str((struct sockaddr *) &destaddr));
     unsigned char addr_buf[19 + len];
