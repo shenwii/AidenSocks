@@ -15,7 +15,7 @@ int __aes_en_de_crypt(__const__ int flg_encrypt, __const__ unsigned char *indata
     EVP_CIPHER_CTX_init(ctx);
     EVP_CipherInit(ctx, EVP_aes_256_cbc(), key, iv, flg_encrypt);
     EVP_CipherUpdate(ctx, outdata, &out_len, indata, len);
-    EVP_CipherFinal(ctx, outdata, &out_len);
+    EVP_CipherFinal(ctx, outdata + out_len, &out_len);
     EVP_CIPHER_CTX_free(ctx);
     return 0;
 }
