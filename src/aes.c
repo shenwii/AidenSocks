@@ -1,24 +1,31 @@
 #include "aes.h"
 
 #include <string.h>
+#include "openssl/evp.h"
+#include "openssl/aes.h"
 
+int __aes_en_de_crypt(__const__ int flg_encrypt, __const__ unsigned char *indata, __const__ int len, unsigned char *outdata, __const__ unsigned char *key)
+{
+    size_t out_len;
+    unsigned char iv[AES_BLOCK_SIZE];
+    memset(iv, '\0', AES_BLOCK_SIZE);
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if(ctx == NULL)
+        return 1;
+    EVP_CIPHER_CTX_init(ctx);
+    EVP_CipherInit(ctx, EVP_aes_256_cbc(), key, iv, flg_encrypt);
+    EVP_CipherUpdate(ctx, outdata, &out_len, indata, len);
+    EVP_CipherFinal(ctx, outdata, &out_len);
+    EVP_CIPHER_CTX_free(ctx);
+    return 0;
+}
 
 int aes_encrypt(__const__ unsigned char *indata, __const__ int len, unsigned char *outdata, __const__ unsigned char *key)
 {
-    unsigned char iv[AES_BLOCK_SIZE];
-    AES_KEY aes;
-    memset(iv, '\0', AES_BLOCK_SIZE);
-    AES_set_encrypt_key(key, AES_KEY_LEN, &aes);
-    AES_cbc_encrypt(indata, outdata, len, &aes, iv, AES_ENCRYPT);
-    return 0;
+    return __aes_en_de_crypt(AES_ENCRYPT, indata, len, outdata, key);
 }
 
 int aes_decrypt(__const__ unsigned char *indata, __const__ int len, unsigned char *outdata, __const__ unsigned char *key)
 {
-    unsigned char iv[AES_BLOCK_SIZE];
-    AES_KEY aes;
-    memset(iv, '\0', AES_BLOCK_SIZE);
-    AES_set_decrypt_key(key, AES_KEY_LEN, &aes);
-    AES_cbc_encrypt(indata, outdata, len, &aes, iv, AES_DECRYPT);
-    return 0;
+    return __aes_en_de_crypt(AES_DECRYPT, indata, len, outdata, key);
 }
