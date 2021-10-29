@@ -6,7 +6,7 @@
 
 int __aes_en_de_crypt(__const__ int flg_encrypt, __const__ unsigned char *indata, __const__ int len, unsigned char *outdata, __const__ unsigned char *key)
 {
-    size_t out_len;
+    int out_len;
     unsigned char iv[AES_BLOCK_SIZE];
     memset(iv, '\0', AES_BLOCK_SIZE);
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
