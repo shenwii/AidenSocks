@@ -71,7 +71,7 @@ int as_udp_read_start(as_udp_t *udp, as_udp_read_f cb, int flags);
 
 int as_udp_write(as_udp_t *udp, __const__ unsigned char *buf, __const__ size_t len, as_udp_wrote_f cb);
 
-int as_resolver(as_socket_t *sck, __const__ char *host, as_resolved_f cb);
+int as_resolver(as_socket_t *sck, __const__ char *host, int ipv6_first, as_resolved_f cb);
 
 void as_socket_map_bind(as_socket_t *sck1, as_socket_t *sck2);
 

@@ -126,6 +126,7 @@ struct as_udp_s
     as_udp_read_f read_cb;
     time_t dns_request_time;
     int dns_try_cnt;
+    int ipv6_first;
     unsigned char *dns_buf;
     size_t dns_buf_len;
 };
@@ -176,16 +177,26 @@ static int __get_socket_error(int fd, char *serrno)
     return getsockopt(fd, SOL_SOCKET, SO_ERROR, serrno, &len);
 }
 
-int __dns_priority(dns_resr_t *dns_resr)
+int __dns_priority(dns_resr_t *dns_resr, int ipv6_first)
 {
     if(dns_resr->type == 0x1c)
-        return 1;
+    {
+        if(ipv6_first)
+            return 1;
+        else
+            return 2;
+    }
     if(dns_resr->type == 0x01)
-        return 2;
+    {
+        if(ipv6_first)
+            return 2;
+        else
+            return 1;
+    }
     return 99;
 }
 
-void __dns_rspn_filter(dns_data_t *dns_data)
+void __dns_rspn_filter(dns_data_t *dns_data, int ipv6_first)
 {
     struct sockaddr_storage addr;
     dns_prtcl_t *tdp;
@@ -209,7 +220,7 @@ void __dns_rspn_filter(dns_data_t *dns_data)
             tdr = &tdp->answer[j];
             if(tdr->type != 0x01 && tdr->type != 0x1c)
                 continue;
-            tpl = __dns_priority(tdr);
+            tpl = __dns_priority(tdr, ipv6_first);
             if(tpl < pl)
             {
                 presrc = tdr;
@@ -342,7 +353,7 @@ static void __socket_loop_event(as_loop_t *loop)
                     dns_data_t *dns_data = (dns_data_t *) udp->sck.data;
                     dns_data->dns_recved_cnt++;
                     if(dns_data->dns_recved_cnt == 2)
-                        __dns_rspn_filter(dns_data);
+                        __dns_rspn_filter(dns_data, udp->ipv6_first);
                     as_close(s);
                 }
                 else
@@ -902,7 +913,7 @@ int __udp_dns_read_callback(as_udp_t *udp, __const__ struct msghdr *msg, __const
         }
     }
     if(dns_data->dns_recved_cnt == 2)
-        __dns_rspn_filter(dns_data);
+        __dns_rspn_filter(dns_data, udp->ipv6_first);
     as_close((as_socket_t *) udp);
     return 0;
 }
@@ -1612,7 +1623,7 @@ int as_udp_write(as_udp_t *udp, __const__ unsigned char *buf, __const__ size_t l
     return 0;
 }
 
-int as_resolver(as_socket_t *sck, __const__ char *host, as_resolved_f cb)
+int as_resolver(as_socket_t *sck, __const__ char *host, int ipv6_first, as_resolved_f cb)
 {
     dns_hdr_flag_t dns_hdr_flag;
     uint16_t type[2] = {0x01, 0x1C};
@@ -1658,6 +1669,7 @@ int as_resolver(as_socket_t *sck, __const__ char *host, as_resolved_f cb)
     {
         as_udp_t *udp = as_udp_init(sck->loop, dns_data, NULL);
         udp->sck.type = SOCKET_TYPE_UDP_DNS;
+        udp->ipv6_first = ipv6_first;
         if(as_udp_connect(udp, (struct sockaddr *) &sck->loop->dns_server) != 0)
         {
             dns_data->dns_recved_cnt++;

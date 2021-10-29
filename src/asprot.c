@@ -43,8 +43,8 @@ int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned c
     }
     asp_header_t header;
     memset(&header, 0, sizeof(asp_header_t));
-    size_t headerlen = AES_ENCODE_LEN(sizeof(asp_header_t));
-    size_t mindatalen = AES_ENCODE_LEN(inlen);
+    size_t headerlen = AES_ENCRYPT_LEN(sizeof(asp_header_t));
+    size_t mindatalen = AES_ENCRYPT_LEN(inlen);
     size_t randlen = rand() % ASP_MAX_RANDOM_LENGTH + 1;
     if(inlen != 0)
         header.crc32 = CRC32(indata, inlen);
@@ -70,7 +70,7 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
     asp_header_t header;
     uint32_t data_total_len;
     uint32_t data_len;
-    int headerlen = AES_ENCODE_LEN(sizeof(asp_header_t));
+    int headerlen = AES_ENCRYPT_LEN(sizeof(asp_header_t));
     int rtn = 0;
     if(inlen == 0)
         return rtn;
@@ -97,7 +97,7 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
         aes_decrypt(tbuf, sizeof(asp_header_t), (unsigned char *) &header, aes_key);
         data_total_len = ntohl(header.data_total_len);
         data_len = ntohl(header.data_len);
-        if(data_total_len < AES_ENCODE_LEN(data_len))
+        if(data_total_len < AES_ENCRYPT_LEN(data_len))
         {
             rtn = 1;
             tlen = 0;
@@ -112,7 +112,7 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
         }
         else
         {
-            ucdata = (unsigned char *) malloc(AES_ENCODE_LEN(data_len));
+            ucdata = (unsigned char *) malloc(AES_ENCRYPT_LEN(data_len));
             if(ucdata == NULL)
             {
                 LOG_ERR(MSG_NOT_ENOUGH_MEMORY);

@@ -1,12 +1,12 @@
 #include "aes.h"
 
 #include <string.h>
-#include "openssl/evp.h"
-#include "openssl/aes.h"
+#include <openssl/evp.h>
+#include <openssl/aes.h>
 
 int __aes_en_de_crypt(__const__ int flg_encrypt, __const__ unsigned char *indata, __const__ int len, unsigned char *outdata, __const__ unsigned char *key)
 {
-    int out_len;
+    int out_len = 0;
     unsigned char iv[AES_BLOCK_SIZE];
     memset(iv, '\0', AES_BLOCK_SIZE);
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
@@ -27,5 +27,5 @@ int aes_encrypt(__const__ unsigned char *indata, __const__ int len, unsigned cha
 
 int aes_decrypt(__const__ unsigned char *indata, __const__ int len, unsigned char *outdata, __const__ unsigned char *key)
 {
-    return __aes_en_de_crypt(AES_DECRYPT, indata, len, outdata, key);
+    return __aes_en_de_crypt(AES_DECRYPT, indata, AES_ENCRYPT_LEN(len), outdata, key);
 }

@@ -6,6 +6,7 @@
 #define CONF_DEFAULT_BIND_IPV6 "localhost"
 #define CONF_DEFAULT_DNS_SERVER "8.8.8.8"
 #define CONF_DEFAULT_DNS_PORT 53
+#define CONF_DEFAULT_IPV6_FIRST 1
 #define CONF_EMPTY_STRING ""
 
 #include <stdint.h>
@@ -23,6 +24,7 @@ typedef struct
     char key[45];
     char dns_server[255];
     uint16_t dns_port;
+    int ipv6_first;
 } conf_t;
 
 int conf_parse(conf_t *conf, __const__ char *filepath, __const__ char *secname);

@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define ASP_MAX_RANDOM_LENGTH 1024
-#define ASP_MAX_DATA_LENGTH(len) (AES_ENCODE_LEN(sizeof(asp_header_t)) + AES_ENCODE_LEN(len) + ASP_MAX_RANDOM_LENGTH)
+#define ASP_MAX_DATA_LENGTH(len) (AES_ENCRYPT_LEN(sizeof(asp_header_t)) + AES_ENCRYPT_LEN(len) + ASP_MAX_RANDOM_LENGTH)
 
 typedef int (*asp_decrypt_callback_f)(void *, __const__ char, __const__ char, __const__ unsigned char *, __const__ size_t);
 
