@@ -27,5 +27,17 @@ int aes_encrypt(__const__ unsigned char *indata, __const__ int len, unsigned cha
 
 int aes_decrypt(__const__ unsigned char *indata, __const__ int len, unsigned char *outdata, __const__ unsigned char *key)
 {
-    return __aes_en_de_crypt(AES_DECRYPT, indata, AES_ENCRYPT_LEN(len), outdata, key);
+    int tmp_len = AES_ENCRYPT_LEN(len);
+    unsigned char *tmp_buf = malloc(tmp_len);
+    if(tmp_buf == NULL)
+        return 1;
+    int rtn = __aes_en_de_crypt(AES_DECRYPT, indata, tmp_len, tmp_buf, key);
+    if(rtn != 0)
+    {
+        free(tmp_buf);
+        return rtn;
+    }
+    memcpy(outdata, tmp_buf, len);
+    free(tmp_buf);
+    return rtn;
 }
