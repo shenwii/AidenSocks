@@ -27,7 +27,8 @@ typedef struct
 } __as_data_t;
 
 unsigned char aes_key[AES_KEY_LEN / 8];
-int ipv6_first;
+
+conf_t conf;
 
 static int __destroy(as_socket_t *sck);
 
@@ -70,7 +71,6 @@ static int __usage(char *prog)
 
 int main(int argc, char **argv)
 {
-    conf_t conf;
     as_loop_t *loop;
     as_tcp_t *tcp;
     as_udp_t *udp;
@@ -83,7 +83,6 @@ int main(int argc, char **argv)
         LOG_ERR(MSG_PARSE_INI_FILE);
         return 1;
     }
-    ipv6_first = conf.ipv6_first;
     int b64kl = strlen(conf.key);
     if(B64_DECODE_LEN(conf.key, b64kl) != AES_KEY_LEN / 8)
     {
@@ -297,7 +296,7 @@ static int __parse_asp_address(as_socket_t *sck, __const__ unsigned char *buf, _
                 addrstr[(int) dlen] = '\0';
                 as_data->addr_len = dlen + 4;
                 as_data->port = *port;
-                if(as_resolver(sck, addrstr, ipv6_first, cb) != 0)
+                if(as_resolver(sck, addrstr, conf.ipv6_first, cb) != 0)
                     return -2;
             }
             sprintf(s,"%d", ntohs(*port));

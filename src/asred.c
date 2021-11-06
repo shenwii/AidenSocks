@@ -20,6 +20,8 @@
 
 unsigned char aes_key[AES_KEY_LEN / 8];
 
+conf_t conf;
+
 struct sockaddr_storage tcp_server_addr = {0};
 
 struct sockaddr_storage udp_server_addr = {0};
@@ -63,7 +65,6 @@ static int __usage(char *prog)
 
 int main(int argc, char **argv)
 {
-    conf_t conf;
     as_loop_t *loop;
     as_tcp_t *tcp;
     as_udp_t *udp;
@@ -199,13 +200,18 @@ static int __redirect_tcp_destaddr(int fd, struct sockaddr_storage *destaddr)
     socklen_t len = sizeof(struct sockaddr_storage);
     int en = 0;
 
-    //get ipv6
-    en = getsockopt(fd, SOL_IPV6, IP6T_SO_ORIGINAL_DST, destaddr, &len);
-    if(en == 0)
-        return 0;
-
-    //get ipv4
-    return getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, destaddr, &len);
+    if(conf.tcp_tproxy == 1)
+    {
+        en = getsockname(fd, (struct sockaddr *) destaddr, &len);
+    }
+    else
+    {
+        //First try to get the ipv6 forwarding source address, and if that fails, try again to get the ipv4
+        en = getsockopt(fd, SOL_IPV6, IP6T_SO_ORIGINAL_DST, destaddr, &len);
+        if(en != 0)
+            en = getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, destaddr, &len);
+    }
+    return en;
 }
 
 static int __tproxy_udp_destaddr(struct msghdr *msg, struct sockaddr_storage *destaddr)

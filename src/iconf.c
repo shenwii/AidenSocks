@@ -37,6 +37,7 @@ int conf_parse(conf_t *conf, __const__ char *filepath, __const__ char *secname)
     strcpy(conf->dns_server, iniparser_getstring(ini, __ckey(secname, "dns_server"), CONF_DEFAULT_DNS_SERVER));
     conf->dns_port = (uint16_t) iniparser_getint(ini, __ckey(secname, "dns_port"), CONF_DEFAULT_DNS_PORT);
     conf->ipv6_first = (uint16_t) iniparser_getint(ini, __ckey(secname, "ipv6_first"), CONF_DEFAULT_IPV6_FIRST);
+    conf->tcp_tproxy = (uint16_t) iniparser_getint(ini, __ckey(secname, "tcp_tproxy"), CONF_DEFAULT_TCP_TPROXY);
     iniparser_freedict(ini);
     return 0;
 }
