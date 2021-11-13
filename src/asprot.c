@@ -67,10 +67,11 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
     char is_call = 0;
     unsigned char *tbuf;
     size_t tlen;
-    asp_header_t header;
     uint32_t data_total_len;
     uint32_t data_len;
     int headerlen = AES_ENCRYPT_LEN(sizeof(asp_header_t));
+    unsigned char header_data[headerlen];
+    asp_header_t *header = (asp_header_t *) header_data;
     int rtn = 0;
     if(inlen == 0)
         return rtn;
@@ -94,9 +95,9 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
     {
         if(tlen <= headerlen)
             break;
-        aes_decrypt(tbuf, sizeof(asp_header_t), (unsigned char *) &header, aes_key);
-        data_total_len = ntohl(header.data_total_len);
-        data_len = ntohl(header.data_len);
+        aes_decrypt(tbuf, headerlen, (unsigned char *) header, aes_key);
+        data_total_len = ntohl(header->data_total_len);
+        data_len = ntohl(header->data_len);
         if(data_total_len < AES_ENCRYPT_LEN(data_len))
         {
             rtn = 1;
@@ -112,16 +113,17 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
         }
         else
         {
-            ucdata = (unsigned char *) malloc(AES_ENCRYPT_LEN(data_len));
+            size_t ucdate_len = AES_ENCRYPT_LEN(data_len);
+            ucdata = (unsigned char *) malloc(ucdate_len);
             if(ucdata == NULL)
             {
                 LOG_ERR(MSG_NOT_ENOUGH_MEMORY);
                 abort();
             }
-            aes_decrypt(tbuf + headerlen, data_len, ucdata, aes_key);
+            aes_decrypt(tbuf + headerlen, ucdate_len, ucdata, aes_key);
         }
-        if((ucdata == NULL && header.crc32 != 0)
-            || (CRC32(ucdata, data_len) != header.crc32))
+        if((ucdata == NULL && header->crc32 != 0)
+            || (CRC32(ucdata, data_len) != header->crc32))
         {
             rtn = 2;
             tlen = 0;
@@ -133,7 +135,7 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
             tlen = 0;
             break;
         }
-        rtn = cb((void *) parm, header.type, header.status, ucdata, data_len);
+        rtn = cb((void *) parm, header->type, header->status, ucdata, data_len);
         is_call = 1;
         free(ucdata);
         if(rtn != 0)
