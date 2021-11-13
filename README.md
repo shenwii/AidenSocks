@@ -5,6 +5,8 @@
 
 AidenSocks is a lightweight secured proxy, it's written by pure c.
 
+Current version: 1.0.1
+
 ## Features
 
     as-server: AidenSocks Server.
