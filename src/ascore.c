@@ -1195,7 +1195,7 @@ int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
         }
         if(flags & AS_TCP_TPROXY)
         {
-#if !(defined _WIN32 || defined __CYGWIN__)
+#if (defined __linux__)
             //need root
             if(setsockopt(tcp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
             {
@@ -1214,7 +1214,7 @@ int as_tcp_bind(as_tcp_t *tcp, struct sockaddr *addr, int flags)
     {
         if(flags & AS_TCP_TPROXY)
         {
-#if !(defined _WIN32 || defined __CYGWIN__)
+#if (defined __linux__)
             //need root
             if(setsockopt(tcp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
             {
@@ -1432,7 +1432,7 @@ int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
         }
         if(flags & AS_UDP_TPROXY)
         {
-#if !(defined _WIN32 || defined __CYGWIN__)
+#if (defined __linux__)
             //need root
             if(setsockopt(udp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
             {
@@ -1451,7 +1451,7 @@ int as_udp_bind(as_udp_t *udp, struct sockaddr *addr, int flags)
     {
         if(flags & AS_UDP_TPROXY)
         {
-#if !(defined _WIN32 || defined __CYGWIN__)
+#if (defined __linux__)
             //need root
             if(setsockopt(udp->sck.fd, SOL_IP, IP_TRANSPARENT, &on, sizeof(on)) != 0)
             {
