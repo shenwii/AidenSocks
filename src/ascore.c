@@ -41,6 +41,7 @@
 #define AS_STATUS_RESOLVING 0x20
 
 #define IO_MUXING_TIMEOUT 500
+#define AS_WRITE_WAIT_TIMEOUT 10
 
 #ifdef __linux__
 #define AS_EPOLL_NUM 50
@@ -106,6 +107,7 @@ struct as_socket_s
         as_buffer_t *header;
         as_buffer_t *last;
     } write_queue;
+    time_t close_time;
     struct sockaddr_storage addr;
     as_socket_destroying_f dest_cb;
 };
@@ -450,7 +452,7 @@ static void __socket_loop_event(as_loop_t *loop)
     p = NULL;
     while(s != NULL)
     {
-        if((s->status & AS_STATUS_CLOSED) && !(s->status & AS_STATUS_RESOLVING))
+        if((s->status & AS_STATUS_CLOSED) && !(s->status & AS_STATUS_RESOLVING) && (s->write_queue.header == NULL || difftime(time(NULL), s->close_time) > AS_WRITE_WAIT_TIMEOUT))
         {
             if(p == NULL)
                 loop->header = s->next;
@@ -1117,6 +1119,7 @@ void __as_close(as_socket_t *sck)
         epoll_ctl(sck->loop->epfd, EPOLL_CTL_DEL, sck->fd, NULL);
 #endif
     sck->status |= AS_STATUS_CLOSED;
+    sck->close_time = time(NULL);
     if(sck->type == SOCKET_TYPE_UDP_FAKE)
     {
         as_udp_t *udp = (as_udp_t *) sck;
