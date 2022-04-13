@@ -435,6 +435,8 @@ static void __free_write_queue(as_socket_t *sck)
 {
     void *p;
     as_buffer_t *asbuf = sck->write_queue.header;
+    if(asbuf != NULL)
+        epoll_ctl(sck->loop->epfd, EPOLL_CTL_DEL, sck->fd, NULL);
     while(asbuf != NULL)
     {
         free(asbuf->data);
@@ -442,6 +444,19 @@ static void __free_write_queue(as_socket_t *sck)
         asbuf = asbuf->next;
         free(p);
     }
+}
+
+static int __socket_can_close2(as_socket_t *s)
+{
+    return (s->status & AS_STATUS_CLOSED) && !(s->status & AS_STATUS_RESOLVING) && (s->write_queue.header == NULL || difftime(time(NULL), s->close_time) > AS_WRITE_WAIT_TIMEOUT);
+}
+
+static int __socket_can_close(as_socket_t *s)
+{
+    if(s->map != NULL)
+        return __socket_can_close2(s) && __socket_can_close2(s->map);
+    else
+        return __socket_can_close2(s);
 }
 
 static void __socket_loop_event(as_loop_t *loop)
@@ -452,7 +467,7 @@ static void __socket_loop_event(as_loop_t *loop)
     p = NULL;
     while(s != NULL)
     {
-        if((s->status & AS_STATUS_CLOSED) && !(s->status & AS_STATUS_RESOLVING) && (s->write_queue.header == NULL || difftime(time(NULL), s->close_time) > AS_WRITE_WAIT_TIMEOUT))
+        if(__socket_can_close(s))
         {
             if(p == NULL)
                 loop->header = s->next;
@@ -690,10 +705,17 @@ void __tcp_on_write(as_tcp_t *tcp)
     {
 #ifdef __linux__
         tcp->sck.events &= ~EPOLLOUT;
-        ev.data.fd = tcp->sck.fd;
-        ev.data.ptr = tcp;
-        ev.events = tcp->sck.events;
-        epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
+        if(tcp->sck.events == 0)
+        {
+            epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_DEL, tcp->sck.fd, NULL);
+        }
+        else
+        {
+            ev.data.fd = tcp->sck.fd;
+            ev.data.ptr = tcp;
+            ev.events = tcp->sck.events;
+            epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
+        }
 #else
         tcp->sck.events &= ~AS_EVENTS_WRITE;
 #endif
@@ -719,6 +741,7 @@ void __tcp_on_write(as_tcp_t *tcp)
             case EINTR:
                 continue;
             default:
+                LOG_DEBUG("error???? %d\n", SOCK_ERRNO);
                 as_close((as_socket_t *) tcp);
                 break;
             }
@@ -938,10 +961,18 @@ void __udp_fake_on_write(as_udp_t *udp)
     {
 #ifdef __linux__
         udp->sck.events &= ~EPOLLOUT;
-        ev.data.fd = udp->sck.fd;
-        ev.data.ptr = udp;
-        ev.events = udp->sck.events;
-        epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
+        if(udp->sck.events == 0)
+        {
+            LOG_DEBUG("eee2\n");
+            epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_DEL, udp->sck.fd, NULL);
+        }
+        else
+        {
+            ev.data.fd = udp->sck.fd;
+            ev.data.ptr = udp;
+            ev.events = udp->sck.events;
+            epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
+        }
 #else
         udp->sck.events &= ~AS_EVENTS_WRITE;
 #endif
@@ -1116,7 +1147,22 @@ void __as_close(as_socket_t *sck)
 {
 #ifdef __linux__
     if(sck->status & AS_STATUS_INEPOLL)
-        epoll_ctl(sck->loop->epfd, EPOLL_CTL_DEL, sck->fd, NULL);
+    {
+        sck->events &= ~EPOLLIN;
+        if(sck->events == 0)
+        {
+            epoll_ctl(sck->loop->epfd, EPOLL_CTL_DEL, sck->fd, NULL);
+        }
+        else
+        {
+            struct epoll_event ev;
+            memset(&ev, 0, sizeof(struct epoll_event));
+            ev.data.fd = sck->fd;
+            ev.data.ptr = sck;
+            ev.events = sck->events;
+            epoll_ctl(sck->loop->epfd, EPOLL_CTL_MOD, sck->fd, &ev);
+        }
+    }
 #endif
     sck->status |= AS_STATUS_CLOSED;
     sck->close_time = time(NULL);
@@ -1315,6 +1361,8 @@ int as_tcp_read_start(as_tcp_t *tcp, as_tcp_read_f cb, int flags)
     struct epoll_event ev;
     memset(&ev, 0, sizeof(struct epoll_event));
 #endif
+    if(tcp->sck.status & AS_STATUS_CLOSED)
+        return 0;
     if(tcp->sck.fd <= 0)
         return 1;
     tcp->read_cb = cb;
@@ -1520,6 +1568,8 @@ int as_udp_read_start(as_udp_t *udp, as_udp_read_f cb, int flags)
     struct epoll_event ev;
     memset(&ev, 0, sizeof(struct epoll_event));
 #endif
+    if(udp->sck.status & AS_STATUS_CLOSED)
+        return 0;
     if(udp->sck.fd <= 0)
         return 1;
     udp->read_cb = cb;
@@ -1806,13 +1856,13 @@ int as_loop_run(as_loop_t *loop)
                     as_close(sck);
                 }
                 continue;
-            }            
+            }
+            if(events_flags & EPOLLOUT)
+                __socket_handle_write(sck);
             if(sck->status & AS_STATUS_CLOSED)
                 continue;
             if(events_flags & EPOLLIN)
                 __socket_handle_read(sck);
-            if(events_flags & EPOLLOUT)
-                __socket_handle_write(sck);
         }
 #else
         max_fd = 0;
@@ -1861,12 +1911,12 @@ int as_loop_run(as_loop_t *loop)
                     }
                     continue;
                 }
+                if(FD_ISSET(fd, &loop->write_set))
+                    __socket_handle_write(sck);
                 if(sck->status & AS_STATUS_CLOSED)
                     continue;
                 if(FD_ISSET(fd, &loop->read_set))
                     __socket_handle_read(sck);
-                if(FD_ISSET(fd, &loop->write_set))
-                    __socket_handle_write(sck);
             }
         }
         else if(wait_count < 0)
