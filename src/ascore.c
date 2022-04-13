@@ -733,7 +733,6 @@ void __tcp_on_write(as_tcp_t *tcp)
             case EINTR:
                 continue;
             default:
-                LOG_DEBUG("error???? %d\n", SOCK_ERRNO);
                 as_close((as_socket_t *) tcp);
                 break;
             }
