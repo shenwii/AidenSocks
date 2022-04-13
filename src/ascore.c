@@ -435,8 +435,6 @@ static void __free_write_queue(as_socket_t *sck)
 {
     void *p;
     as_buffer_t *asbuf = sck->write_queue.header;
-    if(asbuf != NULL)
-        epoll_ctl(sck->loop->epfd, EPOLL_CTL_DEL, sck->fd, NULL);
     while(asbuf != NULL)
     {
         free(asbuf->data);
@@ -484,6 +482,7 @@ static void __socket_loop_event(as_loop_t *loop)
             {
                 if(s->fd > 0)
                 {
+                    epoll_ctl(s->loop->epfd, EPOLL_CTL_DEL, s->fd, NULL);
                     close(s->fd);
                     LOG_DEBUG("%d is closed\n", s->fd);
                 }
@@ -705,17 +704,10 @@ void __tcp_on_write(as_tcp_t *tcp)
     {
 #ifdef __linux__
         tcp->sck.events &= ~EPOLLOUT;
-        if(tcp->sck.events == 0)
-        {
-            epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_DEL, tcp->sck.fd, NULL);
-        }
-        else
-        {
-            ev.data.fd = tcp->sck.fd;
-            ev.data.ptr = tcp;
-            ev.events = tcp->sck.events;
-            epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
-        }
+        ev.data.fd = tcp->sck.fd;
+        ev.data.ptr = tcp;
+        ev.events = tcp->sck.events;
+        epoll_ctl(tcp->sck.loop->epfd, EPOLL_CTL_MOD, tcp->sck.fd, &ev);
 #else
         tcp->sck.events &= ~AS_EVENTS_WRITE;
 #endif
@@ -961,18 +953,10 @@ void __udp_fake_on_write(as_udp_t *udp)
     {
 #ifdef __linux__
         udp->sck.events &= ~EPOLLOUT;
-        if(udp->sck.events == 0)
-        {
-            LOG_DEBUG("eee2\n");
-            epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_DEL, udp->sck.fd, NULL);
-        }
-        else
-        {
-            ev.data.fd = udp->sck.fd;
-            ev.data.ptr = udp;
-            ev.events = udp->sck.events;
-            epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
-        }
+        ev.data.fd = udp->sck.fd;
+        ev.data.ptr = udp;
+        ev.events = udp->sck.events;
+        epoll_ctl(udp->sck.loop->epfd, EPOLL_CTL_MOD, udp->sck.fd, &ev);
 #else
         udp->sck.events &= ~AS_EVENTS_WRITE;
 #endif
@@ -1149,19 +1133,12 @@ void __as_close(as_socket_t *sck)
     if(sck->status & AS_STATUS_INEPOLL)
     {
         sck->events &= ~EPOLLIN;
-        if(sck->events == 0)
-        {
-            epoll_ctl(sck->loop->epfd, EPOLL_CTL_DEL, sck->fd, NULL);
-        }
-        else
-        {
-            struct epoll_event ev;
-            memset(&ev, 0, sizeof(struct epoll_event));
-            ev.data.fd = sck->fd;
-            ev.data.ptr = sck;
-            ev.events = sck->events;
-            epoll_ctl(sck->loop->epfd, EPOLL_CTL_MOD, sck->fd, &ev);
-        }
+        struct epoll_event ev;
+        memset(&ev, 0, sizeof(struct epoll_event));
+        ev.data.fd = sck->fd;
+        ev.data.ptr = sck;
+        ev.events = sck->events;
+        epoll_ctl(sck->loop->epfd, EPOLL_CTL_MOD, sck->fd, &ev);
     }
 #endif
     sck->status |= AS_STATUS_CLOSED;
