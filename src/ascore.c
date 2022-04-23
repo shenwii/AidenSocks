@@ -1128,6 +1128,8 @@ void __socket_handle_write(as_socket_t *sck)
 
 void __as_close(as_socket_t *sck)
 {
+    if(sck->status & AS_STATUS_CLOSED)
+        return;
 #ifdef __linux__
     if(sck->status & AS_STATUS_INEPOLL)
     {
@@ -1829,6 +1831,13 @@ int as_loop_run(as_loop_t *loop)
                 }
                 else
                 {
+                    sck->events &= ~EPOLLOUT;
+                    struct epoll_event ev;
+                    memset(&ev, 0, sizeof(struct epoll_event));
+                    ev.data.fd = sck->fd;
+                    ev.data.ptr = sck;
+                    ev.events = sck->events;
+                    epoll_ctl(sck->loop->epfd, EPOLL_CTL_MOD, sck->fd, &ev);
                     as_close(sck);
                 }
                 continue;
