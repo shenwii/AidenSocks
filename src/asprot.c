@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #if defined _WIN32 || defined __CYGWIN__
-#include <Ws2tcpip.h>
+#include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
 #endif

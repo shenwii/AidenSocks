@@ -20,7 +20,7 @@
 #if defined __linux__
 #include <sys/epoll.h>
 #elif defined _WIN32 || defined __CYGWIN__
-#include <Ws2tcpip.h>
+#include <ws2tcpip.h>
 #else
 #include <sys/select.h>
 #endif
@@ -482,7 +482,9 @@ static void __socket_loop_event(as_loop_t *loop)
             {
                 if(s->fd > 0)
                 {
+#ifdef __linux__
                     epoll_ctl(s->loop->epfd, EPOLL_CTL_DEL, s->fd, NULL);
+#endif
                     close(s->fd);
                     LOG_DEBUG("%d is closed\n", s->fd);
                 }

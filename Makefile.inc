@@ -17,7 +17,7 @@ LDFLAGS += -lssl -lcrypto -liniparser
 
 ifeq ($(OS),Windows_NT)
 CFLAGS += -D_WIN32_WINNT=0x0600
-LDFLAGS += -lws2_32 -lIphlpapi
+LDFLAGS += -lws2_32 -liphlpapi
 endif
 
 ifeq ($(DEBUG),1)

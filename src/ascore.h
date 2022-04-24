@@ -3,7 +3,7 @@
 
 #if defined _WIN32 || defined __CYGWIN__
 #include <winsock2.h>
-#include <Ws2tcpip.h>
+#include <ws2tcpip.h>
 #include <ws2def.h>
 #define msghdr _WSAMSG
 #else
