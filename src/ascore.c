@@ -1858,7 +1858,7 @@ int as_loop_run(as_loop_t *loop)
         {
             if(sck->type == SOCKET_TYPE_UDP_FAKE)
                 continue;
-            if(sck->status & AS_STATUS_CLOSED)
+            if(sck->events == 0)
                 continue;
             if(sck->fd > max_fd)
                 max_fd = sck->fd;
@@ -1874,8 +1874,6 @@ int as_loop_run(as_loop_t *loop)
             for(as_socket_t *sck = loop->header; sck != NULL; sck = sck->next)
             {
                 if(sck->type == SOCKET_TYPE_UDP_FAKE)
-                    continue;
-                if(sck->status & AS_STATUS_CLOSED)
                     continue;
                 int fd = sck->fd;
                 if(FD_ISSET(fd, &loop->except_set))
@@ -1893,6 +1891,7 @@ int as_loop_run(as_loop_t *loop)
                     else
                     {
                         as_close(sck);
+                        sck->events &= ~AS_EVENTS_WRITE;
                     }
                     continue;
                 }
