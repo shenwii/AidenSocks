@@ -47,7 +47,7 @@ int asp_encrypt(__const__ char type, __const__ char status, __const__ unsigned c
     size_t mindatalen = AES_ENCRYPT_LEN(inlen);
     size_t randlen = rand() % ASP_MAX_RANDOM_LENGTH + 1;
     if(inlen != 0)
-        header.crc32 = CRC32(indata, inlen);
+        header.crc32 = htonl(CRC32(indata, inlen));
     header.data_total_len = htonl(mindatalen + randlen);
     header.data_len = htonl(inlen);
     header.status = status;
@@ -123,7 +123,7 @@ int asp_decrypt(__const__ void *parm, __const__ unsigned char *indata, __const__
             aes_decrypt(tbuf + headerlen, ucdate_len, ucdata, aes_key);
         }
         if((ucdata == NULL && header->crc32 != 0)
-            || (CRC32(ucdata, data_len) != header->crc32))
+            || (CRC32(ucdata, data_len) != ntohl(header->crc32)))
         {
             rtn = 2;
             tlen = 0;
