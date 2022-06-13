@@ -176,12 +176,27 @@ static int __destroy(as_socket_t *sck)
 
 static int __tcp_client_dns_resolved(as_socket_t *sck, __const__ char status, __const__ struct sockaddr *addr)
 {
+    struct sockaddr_storage *client_addr;
     as_tcp_t *clnt = (as_tcp_t *) sck;
     __as_data_t *as_data = (__as_data_t *) as_socket_data(sck);
     if(as_data->addr_len != as_data->buf_len)
         return 1;
     if(status == 0)
     {
+        client_addr = as_dest_addr(sck);
+        if(client_addr->ss_family == addr->sa_family)
+        {
+            if(client_addr->ss_family == AF_INET6)
+            {
+                if(memcmp(&((struct sockaddr_in6 *)client_addr)->sin6_addr, &((struct sockaddr_in6 *)client_addr)->sin6_addr, 16) == 0)
+                    return 1;
+            }
+            else
+            {
+                if(memcmp(&((struct sockaddr_in *)client_addr)->sin_addr, &((struct sockaddr_in *)client_addr)->sin_addr, 4) == 0)
+                    return 1;
+            }
+        }
         as_tcp_t *remote = as_tcp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
         as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
         if(addr->sa_family == AF_INET)
@@ -214,6 +229,7 @@ static int __tcp_client_dns_resolved(as_socket_t *sck, __const__ char status, __
 
 static int __udp_client_dns_resolved(as_socket_t *sck, __const__ char status, __const__ struct sockaddr *addr)
 {
+    struct sockaddr_storage *client_addr;
     as_udp_t *clnt = (as_udp_t *) sck;
     __as_data_t *as_data = (__as_data_t *) as_socket_data(sck);
     if(as_data->addr_len == -1 || as_data->addr_len >= as_data->buf_len)
@@ -223,6 +239,20 @@ static int __udp_client_dns_resolved(as_socket_t *sck, __const__ char status, __
     }
     if(status == 0)
     {
+        client_addr = as_dest_addr(sck);
+        if(client_addr->ss_family == addr->sa_family)
+        {
+            if(client_addr->ss_family == AF_INET6)
+            {
+                if(memcmp(&((struct sockaddr_in6 *)client_addr)->sin6_addr, &((struct sockaddr_in6 *)client_addr)->sin6_addr, 16) == 0)
+                    return 1;
+            }
+            else
+            {
+                if(memcmp(&((struct sockaddr_in *)client_addr)->sin_addr, &((struct sockaddr_in *)client_addr)->sin_addr, 4) == 0)
+                    return 1;
+            }
+        }
         as_udp_t *remote = as_udp_init(as_socket_loop((as_socket_t *) clnt), NULL, NULL);
         as_socket_map_bind((as_socket_t *) clnt, (as_socket_t *) remote);
         if(addr->sa_family == AF_INET)
