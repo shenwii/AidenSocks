@@ -188,12 +188,12 @@ static int __tcp_client_dns_resolved(as_socket_t *sck, __const__ char status, __
         {
             if(client_addr->ss_family == AF_INET6)
             {
-                if(memcmp(&((struct sockaddr_in6 *)client_addr)->sin6_addr, &((struct sockaddr_in6 *)client_addr)->sin6_addr, 16) == 0)
+                if(memcmp(&((struct sockaddr_in6 *) client_addr)->sin6_addr, &((struct sockaddr_in6 *) addr)->sin6_addr, 16) == 0)
                     return 1;
             }
             else
             {
-                if(memcmp(&((struct sockaddr_in *)client_addr)->sin_addr, &((struct sockaddr_in *)client_addr)->sin_addr, 4) == 0)
+                if(memcmp(&((struct sockaddr_in *) client_addr)->sin_addr, &((struct sockaddr_in *) addr)->sin_addr, 4) == 0)
                     return 1;
             }
         }
@@ -244,12 +244,12 @@ static int __udp_client_dns_resolved(as_socket_t *sck, __const__ char status, __
         {
             if(client_addr->ss_family == AF_INET6)
             {
-                if(memcmp(&((struct sockaddr_in6 *)client_addr)->sin6_addr, &((struct sockaddr_in6 *)client_addr)->sin6_addr, 16) == 0)
+                if(memcmp(&((struct sockaddr_in6 *) client_addr)->sin6_addr, &((struct sockaddr_in6 *) addr)->sin6_addr, 16) == 0)
                     return 1;
             }
             else
             {
-                if(memcmp(&((struct sockaddr_in *)client_addr)->sin_addr, &((struct sockaddr_in *)client_addr)->sin_addr, 4) == 0)
+                if(memcmp(&((struct sockaddr_in *) client_addr)->sin_addr, &((struct sockaddr_in *) addr)->sin_addr, 4) == 0)
                     return 1;
             }
         }
